@@ -1,0 +1,49 @@
+{
+  "name": "mcp-astgl-knowledge",
+  "version": "1.0.0",
+  "description": "MCP server for searching and citing ASTGL articles about MCP servers, local AI, and AI automation",
+  "type": "module",
+  "bin": {
+    "mcp-astgl-knowledge": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "data/knowledge.db",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "ingest": "tsx src/ingest.ts",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jamescruce/mcp-astgl-knowledge.git"
+  },
+  "homepage": "https://astgl.ai",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "ai",
+    "local-ai",
+    "knowledge-base",
+    "astgl"
+  ],
+  "author": "James Cruce",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "better-sqlite3": "^11.9.1",
+    "sqlite-vec": "^0.1.6",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

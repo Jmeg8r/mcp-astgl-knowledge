@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "astgl-knowledge": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/Users/jamescruce/Projects/mcp-astgl-knowledge"
+    }
+  }
+}
