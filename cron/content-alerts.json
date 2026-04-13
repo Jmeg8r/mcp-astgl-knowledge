@@ -1,0 +1,19 @@
+{
+  "name": "content-gap-alerts",
+  "description": "Check for content gaps, zero-citation articles, repeated failures, and competitor MCP servers",
+  "schedule": "0 9 * * *",
+  "scheduleReadable": "Every day at 9:00 AM (after daily report)",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/alerts.ts --discord",
+    "description": "Run all alert checks and send triggered alerts to Discord"
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON output from the alert engine.",
+      "Critical alerts require immediate attention (content gaps losing traffic).",
+      "Warning alerts should be addressed within the week.",
+      "Info alerts (competitor servers) are for awareness.",
+      "If zero alerts fired, the system is healthy — no action needed."
+    ]
+  }
+}

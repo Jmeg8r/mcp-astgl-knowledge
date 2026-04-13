@@ -1,0 +1,19 @@
+{
+  "name": "daily-aeo-report",
+  "description": "Generate and deliver daily AEO analytics report to Discord",
+  "schedule": "0 8 * * *",
+  "scheduleReadable": "Every day at 8:00 AM",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/daily-report.ts --discord",
+    "description": "Build AEO report from query logs, knowledge base stats, and discovery pipeline, then send to Discord"
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON report output.",
+      "If query volume increased significantly, note the trend.",
+      "If low-confidence queries appear, these are content gaps — flag for new article ideas.",
+      "If stale content is flagged, consider refreshing those articles.",
+      "If discovery pipeline has pending items, the structuring pipeline may need attention."
+    ]
+  }
+}
