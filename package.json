@@ -1,7 +1,8 @@
 {
   "name": "mcp-astgl-knowledge",
-  "version": "1.0.0",
-  "description": "MCP server for searching and citing ASTGL articles about MCP servers, local AI, and AI automation",
+  "mcpName": "io.github.Jmeg8r/astgl-knowledge",
+  "version": "1.1.0",
+  "description": "MCP server with 7 tools for searching, citing, and exploring ASTGL content about MCP servers, local AI, and AI automation — includes tutorials, comparisons, freshness tracking, and rate-limited API access",
   "type": "module",
   "bin": {
     "mcp-astgl-knowledge": "dist/index.js"
@@ -14,13 +15,22 @@
   "scripts": {
     "build": "tsc",
     "ingest": "tsx src/ingest.ts",
+    "ingest-projects": "tsx src/ingest-projects.ts",
+    "discover": "tsx src/discover.ts",
+    "structure": "tsx src/structure.ts",
+    "pipeline": "tsx src/pipeline.ts",
+    "citation-test": "tsx src/citation-test.ts",
+    "daily-report": "tsx src/daily-report.ts",
+    "alerts": "tsx src/alerts.ts",
+    "freshness": "tsx src/freshness.ts",
+    "related": "tsx src/related-articles.ts",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "prepublishOnly": "npm run build"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jamescruce/mcp-astgl-knowledge.git"
+    "url": "git+https://github.com/Jmeg8r/mcp-astgl-knowledge.git"
   },
   "homepage": "https://astgl.ai",
   "keywords": [
@@ -37,6 +47,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.9.1",
+    "rss-parser": "^3.13.0",
     "sqlite-vec": "^0.1.6",
     "zod": "^3.24.4"
   },

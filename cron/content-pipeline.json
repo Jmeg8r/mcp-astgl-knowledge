@@ -1,0 +1,18 @@
+{
+  "name": "content-pipeline",
+  "description": "End-to-end content pipeline: discover new content via RSS → structure, classify, embed → index into MCP knowledge base",
+  "schedule": "0 */6 * * *",
+  "scheduleReadable": "Every 6 hours (00:00, 06:00, 12:00, 18:00)",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/pipeline.ts",
+    "description": "Run unified discover → structure pipeline. Skips structuring if no new content found."
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON output from the pipeline.",
+      "If new articles were discovered AND processed, summarize what was found and indexed.",
+      "If structuring was skipped (no new content), just confirm the pipeline ran cleanly.",
+      "If any step failed, flag the error for investigation."
+    ]
+  }
+}

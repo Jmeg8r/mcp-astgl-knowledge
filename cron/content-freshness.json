@@ -1,0 +1,19 @@
+{
+  "name": "content-freshness",
+  "description": "Check for stale content and ecosystem version changes (npm packages, GitHub releases)",
+  "schedule": "0 10 * * *",
+  "scheduleReadable": "Every day at 10:00 AM (after content-gap-alerts at 9 AM)",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/freshness.ts --discord",
+    "description": "Run freshness checks and send triggered alerts to Discord"
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON output from the freshness checker.",
+      "Stale content alerts list articles older than 90 days — review and update or mark as still current.",
+      "npm version change alerts mean the MCP SDK has updated — check changelog for breaking changes.",
+      "GitHub release alerts mean a tracked tool (Ollama, Open WebUI, etc.) has a new release.",
+      "Ecosystem version info shows current tracked versions for reference."
+    ]
+  }
+}

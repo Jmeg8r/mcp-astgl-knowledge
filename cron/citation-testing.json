@@ -1,0 +1,18 @@
+{
+  "name": "citation-testing-reminder",
+  "description": "Weekly reminder to run AI citation testing across Perplexity, ChatGPT, and Claude",
+  "schedule": "0 9 * * 1",
+  "scheduleReadable": "Every Monday at 9:00 AM",
+  "payload": {
+    "instructions": [
+      "It's time for weekly ASTGL citation testing.",
+      "Run the 20 target questions across each AI engine (Perplexity, ChatGPT, Claude).",
+      "For each question, note whether ASTGL was cited and in what position.",
+      "Record results: npm run citation-test -- record",
+      "Generate report: npm run citation-test -- report",
+      "If citation rate drops below 10%, flag for strategy review.",
+      "If specific categories are underperforming, consider content updates.",
+      "Tip: Test one engine at a time — 20 questions takes ~15 min per engine."
+    ]
+  }
+}
