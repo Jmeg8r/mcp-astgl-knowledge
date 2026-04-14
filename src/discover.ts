@@ -51,6 +51,16 @@ async function fetchRss(
   url: string,
   source: DiscoveredItem["source"]
 ): Promise<DiscoveredItem[]> {
+  // WHAT: Pre-flight check that URL actually serves XML, not HTML
+  // WHY: Some static sites return 200 + HTML for unknown routes instead of 404
+  const preflight = await fetch(url, { method: "HEAD" });
+  const contentType = preflight.headers.get("content-type") || "";
+  if (contentType.includes("text/html")) {
+    throw new Error(
+      `Expected XML but got text/html — feed may not exist at ${url}`
+    );
+  }
+
   const parser = new Parser();
   const feed = await parser.parseURL(url);
 
