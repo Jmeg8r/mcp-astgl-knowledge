@@ -110,3 +110,60 @@ export interface StructuredArticle {
 
 export const EMBEDDING_DIM = 768;
 export const BASE_URL = "https://astgl.ai/answers";
+
+// Phase 5: Idea Journal types
+export type IdeaSource = "manual" | "query-gap" | "low-confidence" | "trending" | "alert";
+export type IdeaPriority = "high" | "medium" | "low";
+export type IdeaStatus = "new" | "in-progress" | "published" | "rejected";
+
+export interface Idea {
+  id: number;
+  title: string;
+  description: string;
+  source: IdeaSource;
+  priority: IdeaPriority;
+  status: IdeaStatus;
+  created_at: string;
+  updated_at: string;
+  related_queries: string[];
+  tags: string[];
+}
+
+export interface IdeaFilters {
+  status?: IdeaStatus;
+  priority?: IdeaPriority;
+  source?: IdeaSource;
+  limit?: number;
+}
+
+// Phase 5: Dashboard types
+export interface DashboardData {
+  generated_at: string;
+  period_days: number;
+  query_trends: {
+    total: number;
+    by_day: Array<{ date: string; count: number }>;
+    by_tool: Record<string, number>;
+    top_queries: Array<{ query: string; count: number }>;
+    avg_confidence: number;
+  };
+  content_coverage: {
+    total_articles: number;
+    by_type: Record<string, number>;
+    freshness_summary: Record<string, number>;
+    recently_added: Array<{ title: string; url: string; date: string }>;
+  };
+  citation_tracking: {
+    top_cited: Array<{ url: string; times_cited: number }>;
+    uncited_count: number;
+  };
+  content_gaps: {
+    low_confidence_queries: Array<{ query: string; confidence: number }>;
+    idea_count_by_status: Record<string, number>;
+  };
+  ecosystem_status: Array<{
+    package_name: string;
+    current_version: string;
+    check_type: string;
+  }>;
+}

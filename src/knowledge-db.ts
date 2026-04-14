@@ -8,7 +8,7 @@ import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import type { Chunk, QaPair, StructuredArticle } from "./types.js";
+import type { Chunk, QaPair, StructuredArticle, Idea, IdeaFilters } from "./types.js";
 import { EMBEDDING_DIM } from "./types.js";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
@@ -82,6 +82,29 @@ function runMigrations(database: InstanceType<typeof Database>): void {
       UNIQUE(check_type, package_name)
     )
   `);
+
+  // WHAT: Idea journal for capturing content opportunities
+  // WHY: Surfaces content gaps from query analytics and manual brainstorming
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ideas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'manual'
+        CHECK(source IN ('manual','query-gap','low-confidence','trending','alert')),
+      priority TEXT NOT NULL DEFAULT 'medium'
+        CHECK(priority IN ('high','medium','low')),
+      status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','in-progress','published','rejected')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      related_queries TEXT DEFAULT '[]',
+      tags TEXT DEFAULT '[]',
+      UNIQUE(title)
+    )
+  `);
+  database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status)");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_source ON ideas(source)");
 }
 
 // WHAT: Insert or replace an article in knowledge.db
@@ -234,6 +257,94 @@ export function upsertQaPairs(
   });
 
   insertAll();
+}
+
+// --- Idea Journal CRUD ---
+
+export function insertIdea(
+  database: InstanceType<typeof Database>,
+  idea: Omit<Idea, "id">
+): number {
+  const result = database
+    .prepare(
+      `INSERT INTO ideas (title, description, source, priority, status, created_at, updated_at, related_queries, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      idea.title,
+      idea.description,
+      idea.source,
+      idea.priority,
+      idea.status,
+      idea.created_at,
+      idea.updated_at,
+      JSON.stringify(idea.related_queries),
+      JSON.stringify(idea.tags)
+    );
+  return result.lastInsertRowid as number;
+}
+
+export function getIdeas(
+  database: InstanceType<typeof Database>,
+  filters: IdeaFilters
+): Idea[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.status) {
+    conditions.push("status = ?");
+    params.push(filters.status);
+  }
+  if (filters.priority) {
+    conditions.push("priority = ?");
+    params.push(filters.priority);
+  }
+  if (filters.source) {
+    conditions.push("source = ?");
+    params.push(filters.source);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = filters.limit || 10;
+  params.push(limit);
+
+  const rows = database
+    .prepare(
+      `SELECT * FROM ideas ${where} ORDER BY
+         CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
+         created_at DESC
+       LIMIT ?`
+    )
+    .all(...params) as Array<{
+    id: number;
+    title: string;
+    description: string;
+    source: string;
+    priority: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    related_queries: string;
+    tags: string;
+  }>;
+
+  return rows.map((r) => ({
+    ...r,
+    source: r.source as Idea["source"],
+    priority: r.priority as Idea["priority"],
+    status: r.status as Idea["status"],
+    related_queries: JSON.parse(r.related_queries) as string[],
+    tags: JSON.parse(r.tags) as string[],
+  }));
+}
+
+export function getIdeaCountByStatus(
+  database: InstanceType<typeof Database>
+): Record<string, number> {
+  const rows = database
+    .prepare("SELECT status, COUNT(*) as count FROM ideas GROUP BY status")
+    .all() as Array<{ status: string; count: number }>;
+  return Object.fromEntries(rows.map((r) => [r.status, r.count]));
 }
 
 export function closeKnowledgeDb(): void {
