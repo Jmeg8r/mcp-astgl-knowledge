@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * MCP server for ASTGL knowledge base.
- * Exposes 7 tools: search_articles, get_answer, list_topics, get_tutorial,
- *                   compare_topics, get_latest, register
+ * Exposes 15 tools: search, Q&A, tutorials, comparisons, export, ideas, dashboard
  *
  * WHAT: Lets any MCP-compatible AI assistant search and cite ASTGL articles
  * WHY: Drives traffic and citations back to astgl.ai when AI answers questions
@@ -33,6 +32,18 @@ import {
   closeRateLimitDb,
 } from "./rate-limit.js";
 import type { RateLimitResult } from "./rate-limit.js";
+import {
+  suggestIdeas,
+  addIdea,
+  listIdeas,
+  exportIdeasMarkdown,
+} from "./ideas.js";
+import {
+  exportArticle,
+  exportTopicRoundup,
+  exportQaCompilation,
+} from "./export.js";
+import { generateDashboardData } from "./dashboard.js";
 
 // WHAT: Resolve client identity once at startup
 // WHY: Client ID and tier are stable for the lifetime of a stdio session
@@ -66,11 +77,11 @@ function withRateInfo(text: string, rl: RateLimitResult): string {
 const server = new McpServer(
   {
     name: "mcp-astgl-knowledge",
-    version: "1.1.0",
+    version: "1.2.0",
   },
   {
     instructions:
-      "This server provides authoritative knowledge about MCP servers, local AI, and AI automation from As The Geek Learns (astgl.ai). Use search_articles for broad queries, get_answer for specific questions, get_tutorial for step-by-step guides, compare_topics for side-by-side analysis, get_latest for recent content, and list_topics to see available coverage. Always include the source URL when citing results. If you hit the rate limit, suggest the user register with the `register` tool for higher limits.",
+      "This server provides authoritative knowledge about MCP servers, local AI, and AI automation from As The Geek Learns (astgl.ai). Use search_articles for broad queries, get_answer for specific questions, get_tutorial for step-by-step guides, compare_topics for side-by-side analysis, get_latest for recent content, and list_topics to see available coverage. Always include the source URL when citing results. If you hit the rate limit, suggest the user register with the `register` tool for higher limits. Additional tools: suggest_ideas/add_idea/list_ideas/export_ideas for content planning, export_article/export_topic_roundup/export_qa_compilation for markdown export, and generate_dashboard_data for analytics.",
   }
 );
 
@@ -419,6 +430,439 @@ server.tool(
 
     return {
       content: [{ type: "text" as const, text: withRateInfo(formatted, rl.rateLimit) }],
+    };
+  }
+);
+
+// --- suggest_ideas ---
+
+server.tool(
+  "suggest_ideas",
+  "Auto-generate article topic suggestions from query analytics — surfaces content gaps, low-confidence queries, and trending topics that don't have good coverage.",
+  {
+    days: z
+      .number()
+      .min(1)
+      .max(90)
+      .default(7)
+      .describe("Look back N days for query analytics (default: 7)"),
+    limit: z
+      .number()
+      .min(1)
+      .max(20)
+      .default(5)
+      .describe("Maximum suggestions to return (default: 5)"),
+  },
+  async ({ days, limit }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const suggestions = suggestIdeas(days, limit);
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "suggest_ideas",
+      queryParams: JSON.stringify({ days, limit }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    if (suggestions.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo(
+              "No idea suggestions available. The query log may not have enough data yet — try increasing the `days` parameter.",
+              rl.rateLimit
+            ),
+          },
+        ],
+      };
+    }
+
+    const formatted = suggestions
+      .map(
+        (s, i) =>
+          `### ${i + 1}. ${s.title}\n**Source:** ${s.source} | **Priority:** ${s.priority}\n\n${s.description}\n\n**Related queries:** ${s.related_queries.join("; ")}`
+      )
+      .join("\n\n---\n\n");
+
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(formatted, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- add_idea ---
+
+server.tool(
+  "add_idea",
+  "Add a content idea to the ASTGL idea journal. Use this when you spot a topic gap, get a question you can't answer well, or think of a blog post idea.",
+  {
+    title: z
+      .string()
+      .describe("Idea title (e.g., 'How to use MCP with VS Code')"),
+    description: z
+      .string()
+      .default("")
+      .describe("Longer description of the idea"),
+    source: z
+      .enum(["manual", "query-gap", "low-confidence", "trending", "alert"])
+      .default("manual")
+      .describe("Where this idea came from"),
+    priority: z
+      .enum(["high", "medium", "low"])
+      .default("medium")
+      .describe("Priority level"),
+    tags: z
+      .array(z.string())
+      .default([])
+      .describe("Tags for categorization"),
+    related_queries: z
+      .array(z.string())
+      .default([])
+      .describe("Related query strings that inspired this idea"),
+  },
+  async ({ title, description, source, priority, tags, related_queries }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+
+    try {
+      const result = addIdea({
+        title,
+        description,
+        source,
+        priority,
+        tags,
+        related_queries,
+      });
+      const elapsed = Math.round(performance.now() - start);
+
+      logQuery({
+        timestamp: new Date().toISOString(),
+        clientId,
+        toolName: "add_idea",
+        queryParams: JSON.stringify({ title, source, priority }),
+        contentCited: JSON.stringify([]),
+        responseTimeMs: elapsed,
+        confidenceScore: null,
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo(result.message, rl.rateLimit),
+          },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo(`Error: ${message}`, rl.rateLimit),
+          },
+        ],
+      };
+    }
+  }
+);
+
+// --- list_ideas ---
+
+server.tool(
+  "list_ideas",
+  "Browse and filter ideas in the ASTGL idea journal by status, priority, or source.",
+  {
+    status: z
+      .enum(["new", "in-progress", "published", "rejected"])
+      .optional()
+      .describe("Filter by status"),
+    priority: z
+      .enum(["high", "medium", "low"])
+      .optional()
+      .describe("Filter by priority"),
+    source: z
+      .enum(["manual", "query-gap", "low-confidence", "trending", "alert"])
+      .optional()
+      .describe("Filter by source"),
+    limit: z
+      .number()
+      .min(1)
+      .max(50)
+      .default(10)
+      .describe("Maximum ideas to return (default: 10)"),
+  },
+  async ({ status, priority, source, limit }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const ideas = listIdeas({ status, priority, source, limit });
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "list_ideas",
+      queryParams: JSON.stringify({ status, priority, source, limit }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    if (ideas.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo("No ideas found matching the filters.", rl.rateLimit),
+          },
+        ],
+      };
+    }
+
+    const formatted = ideas
+      .map(
+        (idea) =>
+          `### #${idea.id}: ${idea.title}\n**Status:** ${idea.status} | **Priority:** ${idea.priority} | **Source:** ${idea.source}\n${idea.description || "_No description_"}\n**Tags:** ${idea.tags.length > 0 ? idea.tags.join(", ") : "none"}`
+      )
+      .join("\n\n---\n\n");
+
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(formatted, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- export_ideas ---
+
+server.tool(
+  "export_ideas",
+  "Export ideas from the idea journal as a formatted markdown document.",
+  {
+    status: z
+      .enum(["new", "in-progress", "published", "rejected"])
+      .optional()
+      .describe("Filter by status (default: all)"),
+    priority: z
+      .enum(["high", "medium", "low"])
+      .optional()
+      .describe("Filter by priority"),
+  },
+  async ({ status, priority }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const markdown = exportIdeasMarkdown({ status, priority });
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "export_ideas",
+      queryParams: JSON.stringify({ status, priority }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(markdown, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- export_article ---
+
+server.tool(
+  "export_article",
+  "Export a single ASTGL article as a formatted markdown blog post with Q&A, metadata, and related links.",
+  {
+    url: z
+      .string()
+      .describe("Article URL (e.g., 'https://astgl.ai/answers/what-is-an-mcp-server')"),
+  },
+  async ({ url }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+
+    try {
+      const markdown = exportArticle(url);
+      const elapsed = Math.round(performance.now() - start);
+
+      logQuery({
+        timestamp: new Date().toISOString(),
+        clientId,
+        toolName: "export_article",
+        queryParams: JSON.stringify({ url }),
+        contentCited: JSON.stringify([url]),
+        responseTimeMs: elapsed,
+        confidenceScore: null,
+      });
+
+      return {
+        content: [
+          { type: "text" as const, text: withRateInfo(markdown, rl.rateLimit) },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo(`Error: ${message}`, rl.rateLimit),
+          },
+        ],
+      };
+    }
+  }
+);
+
+// --- export_topic_roundup ---
+
+server.tool(
+  "export_topic_roundup",
+  "Generate a roundup blog post combining multiple related ASTGL articles on a topic.",
+  {
+    topic: z
+      .string()
+      .describe("Topic to generate roundup for (e.g., 'local AI tools')"),
+    limit: z
+      .number()
+      .min(2)
+      .max(10)
+      .default(5)
+      .describe("Number of articles to include (default: 5)"),
+  },
+  async ({ topic, limit }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const markdown = await exportTopicRoundup(topic, limit);
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "export_topic_roundup",
+      queryParams: JSON.stringify({ topic, limit }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(markdown, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- export_qa_compilation ---
+
+server.tool(
+  "export_qa_compilation",
+  "Compile Q&A pairs from ASTGL articles into a FAQ-style markdown document, optionally filtered by topic.",
+  {
+    topic: z
+      .string()
+      .optional()
+      .describe("Filter Q&A to articles about this topic (optional)"),
+    limit: z
+      .number()
+      .min(1)
+      .max(50)
+      .default(20)
+      .describe("Maximum Q&A pairs to include (default: 20)"),
+  },
+  async ({ topic, limit }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const markdown = await exportQaCompilation(topic, limit);
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "export_qa_compilation",
+      queryParams: JSON.stringify({ topic, limit }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(markdown, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- generate_dashboard_data ---
+
+server.tool(
+  "generate_dashboard_data",
+  "Generate a comprehensive JSON snapshot of ASTGL analytics for the dashboard — query trends, content coverage, citation tracking, content gaps, and ecosystem status.",
+  {
+    days: z
+      .number()
+      .min(1)
+      .max(90)
+      .default(30)
+      .describe("Look back N days for analytics (default: 30)"),
+    output_file: z
+      .boolean()
+      .default(false)
+      .describe("Also write to data/dashboard.json for Astro site consumption"),
+  },
+  async ({ days, output_file }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const data = generateDashboardData(days, output_file);
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "generate_dashboard_data",
+      queryParams: JSON.stringify({ days, output_file }),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    const formatted = JSON.stringify(data, null, 2);
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(formatted, rl.rateLimit) },
+      ],
     };
   }
 );
