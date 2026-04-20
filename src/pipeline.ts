@@ -14,6 +14,7 @@ import { execSync } from "child_process";
 import { join } from "path";
 
 const PROJECT_DIR = join(import.meta.dirname, "..");
+const TSX_BIN = join(PROJECT_DIR, "node_modules", ".bin", "tsx");
 
 interface DiscoverySummary {
   timestamp: string;
@@ -40,9 +41,10 @@ interface PipelineSummary {
 }
 
 // WHAT: Run a script and capture its JSON stdout
-// WHY: Each step is its own process — isolates DB handles and crashes
+// WHY: Each step is its own process — isolates DB handles and crashes.
+//      Use absolute path to local tsx so scheduler shells (no user PATH) work.
 function runStep(script: string): string {
-  return execSync(`tsx ${script}`, {
+  return execSync(`"${TSX_BIN}" ${script}`, {
     cwd: PROJECT_DIR,
     encoding: "utf-8",
     // WHAT: Pipe stdout (JSON) back, let stderr flow to console
