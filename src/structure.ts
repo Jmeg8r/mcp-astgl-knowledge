@@ -449,26 +449,38 @@ async function main() {
     try {
       console.error(`\n  Processing: ${item.url}`);
 
-      // 0. Slug-based deduplication — skip Substack dupes of canonical astgl.ai articles
+      // 0. Slug-based deduplication. Two cases:
+      //  (a) Substack dupe of canonical astgl.ai article.
+      //  (b) Same astgl.ai article re-discovered with URL variation
+      //      (e.g., RSS now returns trailing-slash URLs for already-indexed
+      //      articles stored without the slash → UNIQUE constraint on slug).
       const slug = deriveSlug(item.url);
       const existingBySlug = knowledgeDb
         .prepare("SELECT url FROM articles WHERE slug = ?")
         .get(slug) as { url: string } | undefined;
 
-      if (
-        existingBySlug &&
-        existingBySlug.url.includes("astgl.ai") &&
-        !item.url.includes("astgl.ai")
-      ) {
-        console.error(`    Skipped: duplicate of canonical ${existingBySlug.url}`);
-        summary.skipped++;
-        summary.articles.push({
-          url: item.url,
-          title: item.title || "unknown",
-          status: "skipped-duplicate",
-        });
-        markProcessed.run(item.id);
-        continue;
+      if (existingBySlug) {
+        const stripSlash = (u: string) => u.replace(/\/+$/, "");
+        const isSubstackDupe =
+          existingBySlug.url.includes("astgl.ai") &&
+          !item.url.includes("astgl.ai");
+        const isSameArticle =
+          stripSlash(existingBySlug.url) === stripSlash(item.url);
+
+        if (isSubstackDupe || isSameArticle) {
+          const reason = isSameArticle
+            ? `already indexed as ${existingBySlug.url}`
+            : `duplicate of canonical ${existingBySlug.url}`;
+          console.error(`    Skipped: ${reason}`);
+          summary.skipped++;
+          summary.articles.push({
+            url: item.url,
+            title: item.title || "unknown",
+            status: isSameArticle ? "skipped-already-indexed" : "skipped-duplicate",
+          });
+          markProcessed.run(item.id);
+          continue;
+        }
       }
 
       // 1. Fetch full content
