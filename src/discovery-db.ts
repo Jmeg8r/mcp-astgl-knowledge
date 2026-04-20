@@ -21,6 +21,15 @@ export interface DiscoveredItem {
 
 export type UpsertResult = "new" | "updated" | "skipped";
 
+// Strips trailing slashes from a URL path so `/answers/foo` and `/answers/foo/`
+// are treated as the same item. Guards against silent is_new=1 churn when a
+// source (astgl.ai Astro, etc.) flips trailing-slash behavior between versions.
+// Root URLs like `https://example.com/` collapse to `https://example.com` —
+// fine, we never ingest bare hostnames through RSS.
+export function normalizeUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
 let db: InstanceType<typeof Database> | null = null;
 
 // WHAT: Initialize discovery database with schema
@@ -46,20 +55,29 @@ export function initDb(): InstanceType<typeof Database> {
     )
   `);
 
+  // One-shot normalization of legacy trailing-slash URLs. Paired with
+  // upsertItem() which normalizes on insert, so once rows are clean this
+  // UPDATE is a cheap no-op on every subsequent init.
+  db.exec(`UPDATE discovered_content SET url = rtrim(url, '/') WHERE url != rtrim(url, '/')`);
+
   return db;
 }
 
 // WHAT: Insert or update a discovered item based on URL + content hash
-// WHY: Dedup via URL, detect content changes via hash difference
+// WHY: Dedup via URL, detect content changes via hash difference.
+//      URL is normalized here so trailing-slash drift between RSS versions
+//      doesn't re-queue the same article as new (see structure.ts dedup
+//      fallback in PR #5 for the corresponding downstream safety net).
 export function upsertItem(
   database: InstanceType<typeof Database>,
   item: DiscoveredItem
 ): UpsertResult {
   const now = new Date().toISOString();
+  const url = normalizeUrl(item.url);
 
   const existing = database
     .prepare("SELECT id, content_hash FROM discovered_content WHERE url = ?")
-    .get(item.url) as { id: number; content_hash: string } | undefined;
+    .get(url) as { id: number; content_hash: string } | undefined;
 
   if (!existing) {
     database
@@ -68,7 +86,7 @@ export function upsertItem(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
       )
       .run(
-        item.url,
+        url,
         item.title,
         item.description,
         item.pubDate,
