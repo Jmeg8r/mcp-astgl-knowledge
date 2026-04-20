@@ -44,6 +44,19 @@ interface PipelineSummary {
   articles: Array<{ url: string; title: string; status: string }>;
 }
 
+// Tags a step so its failure message pins down which await threw.
+// Without this the outer catch's "fetch failed" could be fetchContent, embed,
+// classifyContent, or extractQaPairs — all of them end up calling fetch()
+// against different services. Node 24's fetch error doesn't include URL.
+async function step<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`[${label}] ${msg}`);
+  }
+}
+
 // ─── Content Fetching ────────────────────────────────────────────────
 
 // WHAT: Fetch article URL and convert HTML to clean markdown
@@ -485,7 +498,7 @@ async function main() {
 
       // 1. Fetch full content
       console.error("    Fetching content...");
-      const markdown = await fetchContent(item.url);
+      const markdown = await step("fetch", () => fetchContent(item.url));
 
       if (markdown.length < 100) {
         console.error("    Skipped: content too short");
@@ -500,16 +513,16 @@ async function main() {
 
       // 2. Classify content
       console.error("    Classifying via gemma4:26b...");
-      const classification = await classifyContent(markdown);
+      const classification = await step("classify", () => classifyContent(markdown));
       console.error(
         `    Type: ${classification.content_type} | Title: ${classification.title}`
       );
 
-      // 3. Extract Q&A pairs
+      // 3. Extract Q&A pairs — non-fatal; proceed with empty array on failure.
       console.error("    Extracting Q&A pairs...");
       let qaPairs: QaPair[] = [];
       try {
-        qaPairs = await extractQaPairs(markdown);
+        qaPairs = await step("qa-extract", () => extractQaPairs(markdown));
         console.error(`    Extracted ${qaPairs.length} Q&A pairs`);
       } catch (qaErr) {
         console.error(
@@ -534,7 +547,7 @@ async function main() {
       const allEmbeddings: number[][] = [];
       for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
         const batch = chunks.slice(i, i + BATCH_SIZE);
-        const embeddings = await embed(batch.map((c) => c.content));
+        const embeddings = await step("embed", () => embed(batch.map((c) => c.content)));
         allEmbeddings.push(...embeddings);
       }
 
