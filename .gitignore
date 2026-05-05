@@ -10,3 +10,6 @@ data/citation-test.db
 data/alerts.db
 data/discovery.db
 logs/
+data/*.bak.*
+.claude/worktrees/
+.claude/settings.local.json

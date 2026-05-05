@@ -234,6 +234,50 @@ export function replaceChunksForArticle(
   replaceAll();
 }
 
+// WHAT: Hard-delete an article and every dependent row (chunks, vectors, Q&A)
+// WHY: Used by the draft reconciler to retire orphaned drafts whose source folder
+//      has been removed or renamed Published_*. Wrapped in a transaction so a
+//      partial failure can't leave dangling vec_chunks rows.
+export function deleteArticle(
+  database: InstanceType<typeof Database>,
+  articleUrl: string
+): { chunksDeleted: number; qaDeleted: number; articleDeleted: boolean } {
+  let chunksDeleted = 0;
+  let qaDeleted = 0;
+  let articleDeleted = false;
+
+  const tx = database.transaction(() => {
+    const existingChunks = database
+      .prepare("SELECT id FROM chunks WHERE article_url = ?")
+      .all(articleUrl) as Array<{ id: number }>;
+
+    const deleteVec = database.prepare(
+      "DELETE FROM vec_chunks WHERE chunk_id = ?"
+    );
+    for (const chunk of existingChunks) {
+      deleteVec.run(chunk.id);
+    }
+
+    const chunkResult = database
+      .prepare("DELETE FROM chunks WHERE article_url = ?")
+      .run(articleUrl);
+    chunksDeleted = chunkResult.changes;
+
+    const qaResult = database
+      .prepare("DELETE FROM article_qa WHERE article_url = ?")
+      .run(articleUrl);
+    qaDeleted = qaResult.changes;
+
+    const articleResult = database
+      .prepare("DELETE FROM articles WHERE url = ?")
+      .run(articleUrl);
+    articleDeleted = articleResult.changes > 0;
+  });
+
+  tx();
+  return { chunksDeleted, qaDeleted, articleDeleted };
+}
+
 // WHAT: Insert extracted Q&A pairs for an article
 // WHY: Normalizes Q&A data for potential future querying
 export function upsertQaPairs(

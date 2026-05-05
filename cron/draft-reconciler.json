@@ -1,0 +1,18 @@
+{
+  "name": "draft-reconciler",
+  "description": "Retires stale draft entries from knowledge.db whose source folder under astgl-articles/substack/ is gone (deleted or renamed Published_*). Runs 2h after the nightly drafts ingester so newly shipped pieces are retired the same night. Without this, MCP search returns the same content twice (rough draft + polished published version).",
+  "schedule": "0 2 * * *",
+  "scheduleReadable": "Every night at 02:00",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/reconcile-drafts.ts",
+    "description": "Hard-deletes stale draft entries (rows + chunks + vectors + qa). Auto-backs up data/knowledge.db to data/knowledge.db.bak.pre-reconcile-<ISO> before any DELETE; pass --no-backup to skip; pass --dry-run to preview only."
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON output: examined (total drafts in DB), retired[] (each with url, title, reason, chunks_deleted, qa_deleted), backup_path.",
+      "If retired count is unexpectedly high, check whether the substack/ folder layout changed (e.g., a sweep moved many drafts to /published/) — flag it.",
+      "If backup_path is set, the pre-run snapshot is on disk; clean up older snapshots manually after a week.",
+      "If 'reason' is 'url-malformed' for any retirement, that draft URL did not match the YYYY-MM-DD-slug pattern — investigate the source row before treating it as a clean retirement."
+    ]
+  }
+}

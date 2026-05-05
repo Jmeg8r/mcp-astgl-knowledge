@@ -16,6 +16,8 @@
     "build": "tsc",
     "ingest": "tsx src/ingest.ts",
     "ingest-projects": "tsx src/ingest-projects.ts",
+    "ingest-drafts": "tsx src/ingest-drafts.ts",
+    "reconcile-drafts": "tsx src/reconcile-drafts.ts",
     "discover": "tsx src/discover.ts",
     "structure": "tsx src/structure.ts",
     "pipeline": "tsx src/pipeline.ts",
