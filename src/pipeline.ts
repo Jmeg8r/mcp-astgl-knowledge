@@ -50,7 +50,10 @@ function runStep(script: string): string {
     // WHAT: Pipe stdout (JSON) back, let stderr flow to console
     // WHY: stderr has progress logs, stdout has the structured summary
     stdio: ["pipe", "pipe", "inherit"],
-    timeout: 300_000, // 5 min per step
+    // WHY: gemma4:26b cold-load + classify + Q&A + embeddings can exceed
+    //      5 min on the first article of a run. 15 min covers cold start
+    //      plus a small batch; per-article keep_alive avoids reloads after.
+    timeout: 900_000,
   });
 }
 
@@ -83,9 +86,18 @@ async function main() {
     summary.discovery = { error: message };
   }
 
-  // --- Step 2: Structuring (conditional) ---
-  if (newItems > 0) {
-    console.error("--- Step 2: Content Structuring ---");
+  // --- Step 2: Structuring ---
+  // WHY: Always run when discovery succeeded — structure.ts queries
+  //      `is_new=1` from the queue, not "what discovery just emitted",
+  //      so items stranded by a prior failed run get retried on the next
+  //      pass. The step short-circuits cheaply when the queue is empty.
+  if ("error" in summary.discovery) {
+    console.error("--- Step 2: Skipped (discovery failed) ---\n");
+    summary.structuring = { skipped: true, reason: "discovery failed" };
+  } else {
+    console.error(
+      `--- Step 2: Content Structuring (${newItems} new from this run) ---`
+    );
     try {
       const structuringOutput = runStep("src/structure.ts");
       const structuringResult: StructuringSummary = JSON.parse(structuringOutput);
@@ -98,12 +110,6 @@ async function main() {
       console.error(`\nStructuring FAILED: ${message}\n`);
       summary.structuring = { error: message };
     }
-  } else if ("error" in summary.discovery) {
-    console.error("--- Step 2: Skipped (discovery failed) ---\n");
-    summary.structuring = { skipped: true, reason: "discovery failed" };
-  } else {
-    console.error("--- Step 2: Skipped (no new content) ---\n");
-    summary.structuring = { skipped: true, reason: "no new content discovered" };
   }
 
   summary.duration_ms = Math.round(performance.now() - pipelineStart);
