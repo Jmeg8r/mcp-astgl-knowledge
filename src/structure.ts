@@ -24,6 +24,11 @@ import {
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
 const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL || "gemma4:26b";
+// WHY: Keep gemma4:26b (17 GB) and nomic-embed-text resident for the
+//      duration of a structuring run so we pay the cold-load cost once,
+//      not per article. 30 min covers a healthy batch with Ollama's
+//      default keep_alive (5 min) being too tight for our cadence.
+const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || "30m";
 
 const DISCOVERY_DB_PATH = join(import.meta.dirname, "..", "data", "discovery.db");
 
@@ -162,6 +167,7 @@ async function classifyContent(
     body: JSON.stringify({
       model: CLASSIFY_MODEL,
       stream: false,
+      keep_alive: OLLAMA_KEEP_ALIVE,
       format: {
         type: "object",
         properties: {
@@ -209,6 +215,7 @@ async function extractQaPairs(text: string): Promise<QaPair[]> {
     body: JSON.stringify({
       model: CLASSIFY_MODEL,
       stream: false,
+      keep_alive: OLLAMA_KEEP_ALIVE,
       format: {
         type: "object",
         properties: {
@@ -393,7 +400,7 @@ async function embed(texts: string[]): Promise<number[][]> {
   const resp = await fetch(`${OLLAMA_URL}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBED_MODEL, input: safeTexts }),
+    body: JSON.stringify({ model: EMBED_MODEL, input: safeTexts, keep_alive: OLLAMA_KEEP_ALIVE }),
   });
 
   if (!resp.ok) {
