@@ -105,6 +105,128 @@ function runMigrations(database: InstanceType<typeof Database>): void {
   `);
   database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status)");
   database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_source ON ideas(source)");
+
+  // WHAT: Track auto-rewrite jobs for stale articles (one row per attempt)
+  // WHY: Drives the daily rewrite-queue cron + the Telegram approval gate.
+  //      cooldown_until lets a rejected article sit for N days before re-queue.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS rewrite_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      article_url TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      status TEXT NOT NULL CHECK (status IN (
+        'pending_approval','approved','published','rejected','failed'
+      )),
+      draft_path TEXT,
+      telegram_chat_id TEXT,
+      telegram_thread_id INTEGER,
+      telegram_message_id INTEGER,
+      approved_at TEXT,
+      published_at TEXT,
+      substack_url TEXT,
+      cooldown_until TEXT,
+      error TEXT
+    )
+  `);
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_status ON rewrite_jobs(status)"
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_article ON rewrite_jobs(article_url)"
+  );
+}
+
+// WHAT: Shared "which articles are stale?" query.
+// WHY: Both freshness.ts (for alerting) and rewrite-queue.ts (for picking
+//      the next article to rewrite) need the exact same filter — keep it
+//      in one place so the two stay in lockstep when STALE_THRESHOLD_DAYS
+//      changes or the COALESCE priority is tweaked.
+export interface StaleArticleRow {
+  title: string;
+  url: string;
+  effective_date: string;
+}
+
+export function getStaleArticles(
+  database: InstanceType<typeof Database>,
+  thresholdDays = 90,
+  excludeUrls: string[] = []
+): StaleArticleRow[] {
+  const staleDate = new Date();
+  staleDate.setDate(staleDate.getDate() - thresholdDays);
+  const staleDateStr = staleDate.toISOString();
+
+  const exclusion =
+    excludeUrls.length > 0
+      ? `AND url NOT IN (${excludeUrls.map(() => "?").join(",")})`
+      : "";
+
+  const sql = `SELECT title, url,
+                      COALESCE(last_reviewed_at, pub_date, processed_at) as effective_date
+               FROM articles
+               WHERE COALESCE(last_reviewed_at, pub_date, processed_at) IS NOT NULL
+                 AND COALESCE(last_reviewed_at, pub_date, processed_at) < ?
+                 ${exclusion}
+               ORDER BY COALESCE(last_reviewed_at, pub_date, processed_at) ASC`;
+
+  return database.prepare(sql).all(staleDateStr, ...excludeUrls) as StaleArticleRow[];
+}
+
+// WHAT: Return the assembled markdown body for an article by reading its chunks.
+// WHY: Articles table holds metadata only; the actual prose lives in `chunks`.
+//      The rewriter needs the original text as input.
+export interface AssembledArticle {
+  title: string;
+  url: string;
+  description: string | null;
+  pub_date: string | null;
+  body: string;
+}
+
+export function assembleArticleBody(
+  database: InstanceType<typeof Database>,
+  articleUrl: string
+): AssembledArticle | null {
+  const article = database
+    .prepare(
+      "SELECT title, url, description, pub_date FROM articles WHERE url = ?"
+    )
+    .get(articleUrl) as
+    | { title: string; url: string; description: string | null; pub_date: string | null }
+    | undefined;
+
+  if (!article) return null;
+
+  const chunks = database
+    .prepare(
+      `SELECT section_heading, chunk_type, content
+       FROM chunks
+       WHERE article_url = ?
+       ORDER BY article_order ASC`
+    )
+    .all(articleUrl) as Array<{
+    section_heading: string | null;
+    chunk_type: string | null;
+    content: string;
+  }>;
+
+  const parts: string[] = [];
+  let currentHeading: string | null = null;
+  for (const chunk of chunks) {
+    if (chunk.section_heading && chunk.section_heading !== currentHeading) {
+      currentHeading = chunk.section_heading;
+      parts.push(`## ${chunk.section_heading}`);
+    }
+    parts.push(chunk.content);
+  }
+
+  return {
+    title: article.title,
+    url: article.url,
+    description: article.description,
+    pub_date: article.pub_date,
+    body: parts.join("\n\n").trim(),
+  };
 }
 
 // WHAT: Insert or replace an article in knowledge.db

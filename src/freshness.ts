@@ -21,7 +21,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
-import { initKnowledgeDb } from "./knowledge-db.js";
+import { initKnowledgeDb, getStaleArticles } from "./knowledge-db.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const KNOWLEDGE_PATH = join(DATA_DIR, "knowledge.db");
@@ -234,24 +234,8 @@ function checkStaleContent(
 
   // WHAT: Use COALESCE priority: last_reviewed_at > pub_date > processed_at
   // WHY: If reviewed recently, that resets the clock. Otherwise use real pub date.
-  const staleDate = new Date();
-  staleDate.setDate(staleDate.getDate() - STALE_THRESHOLD_DAYS);
-  const staleDateStr = staleDate.toISOString();
-
-  const staleArticles = knowledgeDb
-    .prepare(
-      `SELECT title, url,
-              COALESCE(last_reviewed_at, pub_date, processed_at) as effective_date
-       FROM articles
-       WHERE COALESCE(last_reviewed_at, pub_date, processed_at) IS NOT NULL
-         AND COALESCE(last_reviewed_at, pub_date, processed_at) < ?
-       ORDER BY COALESCE(last_reviewed_at, pub_date, processed_at) ASC`
-    )
-    .all(staleDateStr) as Array<{
-    title: string;
-    url: string;
-    effective_date: string;
-  }>;
+  // Shared helper — also used by rewrite-queue.ts so both stay in lockstep.
+  const staleArticles = getStaleArticles(knowledgeDb, STALE_THRESHOLD_DAYS);
 
   if (staleArticles.length === 0) {
     return { alerts: [], staleCount: 0, totalCount: totalRow.count };

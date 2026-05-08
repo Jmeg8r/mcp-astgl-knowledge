@@ -26,6 +26,9 @@
     "daily-report": "tsx src/daily-report.ts",
     "alerts": "tsx src/alerts.ts",
     "freshness": "tsx src/freshness.ts",
+    "rewrite-queue": "pass-cli run --env-file .env -- node dist/rewrite-queue.js",
+    "rewrite-queue:dev": "pass-cli run --env-file .env -- tsx src/rewrite-queue.ts",
+    "publish-rewrite": "pass-cli run --env-file .env -- node dist/publish-rewrite.js",
     "related": "tsx src/related-articles.ts",
     "dashboard-data": "tsx src/dashboard.ts",
     "start": "node dist/index.js",
@@ -51,6 +54,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.9.1",
+    "dotenv": "^17.4.2",
     "rss-parser": "^3.13.0",
     "sqlite-vec": "^0.1.6",
     "zod": "^3.24.4"
