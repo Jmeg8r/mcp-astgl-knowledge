@@ -77,7 +77,7 @@ export interface LatestArticle {
 }
 
 // Content structuring types
-export type ContentType = "article" | "tutorial" | "faq" | "comparison" | "guide" | "newsletter" | "project";
+export type ContentType = "article" | "tutorial" | "faq" | "comparison" | "guide" | "newsletter" | "project" | "draft";
 
 export interface QaPair {
   question: string;

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.astgl.knowledge.draft-pipeline</string>
+
+    <key>Comment</key>
+    <string>Nightly indexer for ASTGL pre-publication drafts and topic ledger (00:00 daily)</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/jamescruce/.nvm/versions/node/v24.14.0/bin/node</string>
+      <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/dist/ingest-drafts.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/Users/jamescruce/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <key>ASTGL_DRAFTS_DIR</key>
+      <string>/Users/jamescruce/Projects/astgl-articles/substack</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>0</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/draft-pipeline.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/draft-pipeline.err.log</string>
+  </dict>
+</plist>

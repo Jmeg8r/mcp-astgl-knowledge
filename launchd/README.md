@@ -36,6 +36,14 @@ tail -f logs/content-pipeline.err.log
 - **`ai.astgl.knowledge.content-pipeline.plist`** — runs `dist/pipeline.js`
   every 6 hours (00:00, 06:00, 12:00, 18:00 local). Discovery + structure
   pass. Load-bearing for the MCP knowledge base.
+- **`ai.astgl.knowledge.draft-pipeline.plist`** — runs `dist/ingest-drafts.js`
+  nightly at 00:00. Indexes pre-publication drafts under
+  `astgl-articles/substack/` and the processed-moments topic ledger.
+- **`ai.astgl.knowledge.draft-reconciler.plist`** — runs
+  `dist/reconcile-drafts.js` nightly at 02:00 (2h after the drafts ingester).
+  Hard-deletes draft entries whose source folder is gone or renamed
+  `Published_*`, so MCP search no longer cites stale drafts after a
+  piece ships. Auto-backs up `data/knowledge.db` before DELETE.
 
 ## What's NOT in here (and why)
 
