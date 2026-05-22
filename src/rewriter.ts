@@ -1,7 +1,7 @@
 /**
  * Two-pass article rewriter.
  *
- * Pass 1 — Ollama (qwen3:32b-fast) generates a structurally faithful rewrite,
+ * Pass 1 — Ollama (qwen3-coder:30b) generates a structurally faithful rewrite,
  * updating tool versions, deprecated APIs, and stale references.
  *
  * Pass 2 — Claude Sonnet 4.6 polishes the draft against the ASTGL voice
@@ -26,7 +26,7 @@ const VOICE_PROFILE_PATH = join(
 );
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_REWRITE_MODEL = process.env.OLLAMA_REWRITE_MODEL || "gemma4:26b";
+const OLLAMA_REWRITE_MODEL = process.env.OLLAMA_REWRITE_MODEL || "qwen3-coder:30b";
 const CLAUDE_MODEL = process.env.CLAUDE_REWRITE_MODEL || "claude-sonnet-4-6";
 const ANTHROPIC_API_VERSION = "2023-06-01";
 
