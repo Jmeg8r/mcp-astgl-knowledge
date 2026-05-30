@@ -4,30 +4,41 @@
  * WHAT: Logs every MCP tool invocation with timing, params, and cited content
  * WHY: Enables analytics on what users ask, which content gets cited, and response quality
  *
- * Performance:
- *   Entries are buffered in memory and flushed to SQLite in batches
- *   (every 5 seconds or when buffer hits 20 entries) to avoid blocking responses.
+ * Durability:
+ *   Each entry is written synchronously the moment it is logged. stdio MCP servers are
+ *   client-spawned and torn down with SIGTERM/SIGKILL when a session ends — they never
+ *   exit gracefully — so any in-memory buffer would be silently lost on every short
+ *   session. We avoid that entirely by holding no buffer: the db runs in WAL mode, where
+ *   a single durable INSERT (~0.014ms) is actually cheaper than the old amortized batch
+ *   write, and survives SIGTERM, SIGKILL, and crashes alike.
  */
 
-import { join } from "path";
+import { join, dirname } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
 import type { QueryLogEntry } from "./types.js";
 
-const LOG_DB_PATH = join(import.meta.dirname, "..", "data", "query-log.db");
-
-const FLUSH_INTERVAL_MS = 5_000;
-const FLUSH_BATCH_SIZE = 20;
+// WHAT: Allow the log db path to be overridden via env
+// WHY: Lets tests point at an isolated tmp db instead of the real data/ file
+const LOG_DB_PATH =
+  process.env.ASTGL_QUERY_LOG_PATH ??
+  join(import.meta.dirname, "..", "data", "query-log.db");
 
 let logDb: InstanceType<typeof Database> | null = null;
-let buffer: QueryLogEntry[] = [];
-let flushTimer: ReturnType<typeof setInterval> | null = null;
+let insertStmt: Database.Statement<unknown[]> | null = null;
+let handlersRegistered = false;
 
 export function initQueryLog(): InstanceType<typeof Database> {
-  const dataDir = join(import.meta.dirname, "..", "data");
+  const dataDir = dirname(LOG_DB_PATH);
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 
   logDb = new Database(LOG_DB_PATH);
+
+  // WHAT: Run in WAL (write-ahead log) journal mode
+  // WHY: Every INSERT is durably committed immediately — no buffer to lose on a
+  //      signal-kill — while staying fast (~0.014ms/insert) and letting the cron
+  //      readers (daily-report, dashboard, alerts) read concurrently with writes.
+  logDb.pragma("journal_mode = WAL");
 
   logDb.exec(`
     CREATE TABLE IF NOT EXISTS query_log (
@@ -51,78 +62,73 @@ export function initQueryLog(): InstanceType<typeof Database> {
     "CREATE INDEX IF NOT EXISTS idx_query_log_tool ON query_log(tool_name)"
   );
 
-  // WHAT: Start periodic flush timer
-  // WHY: Ensures buffered entries are written even during low-traffic periods
-  flushTimer = setInterval(flushBuffer, FLUSH_INTERVAL_MS);
-  flushTimer.unref(); // Don't keep process alive just for logging
+  // WHAT: Prepare the INSERT once and reuse it for every logQuery call
+  // WHY: Avoids re-parsing the SQL on each invocation
+  insertStmt = logDb.prepare<unknown[]>(
+    `INSERT INTO query_log (timestamp, client_id, tool_name, query_params, content_cited, response_time_ms, confidence_score)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
 
-  // WHAT: Flush on process exit
-  // WHY: Don't lose buffered entries when the MCP server shuts down
-  process.on("beforeExit", flushBuffer);
+  registerShutdownHandlers();
 
   return logDb;
 }
 
-// WHAT: Buffer log entries and flush when threshold is reached
-// WHY: Removes ~1-5ms synchronous INSERT from every tool response
+// WHAT: Persist a single log entry synchronously
+// WHY: No buffering — the write is durable the instant it returns, so nothing is
+//      lost when the client kills the server. The cost (~0.014ms in WAL) is
+//      negligible against typical MCP tool latency.
 export function logQuery(entry: QueryLogEntry): void {
-  if (!logDb) return;
-
-  buffer.push(entry);
-
-  if (buffer.length >= FLUSH_BATCH_SIZE) {
-    flushBuffer();
-  }
-}
-
-// WHAT: Write all buffered entries to SQLite in a single transaction
-// WHY: Batch INSERT in a transaction is ~10x faster than individual INSERTs
-function flushBuffer(): void {
-  if (!logDb || buffer.length === 0) return;
-
-  const entries = buffer.splice(0);
+  if (!logDb || !insertStmt) return;
 
   try {
-    const insert = logDb.prepare(
-      `INSERT INTO query_log (timestamp, client_id, tool_name, query_params, content_cited, response_time_ms, confidence_score)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    insertStmt.run(
+      entry.timestamp,
+      entry.clientId,
+      entry.toolName,
+      entry.queryParams,
+      entry.contentCited,
+      entry.responseTimeMs,
+      entry.confidenceScore
     );
-
-    const insertAll = logDb.transaction(() => {
-      for (const entry of entries) {
-        insert.run(
-          entry.timestamp,
-          entry.clientId,
-          entry.toolName,
-          entry.queryParams,
-          entry.contentCited,
-          entry.responseTimeMs,
-          entry.confidenceScore
-        );
-      }
-    });
-
-    insertAll();
   } catch (err) {
-    // WHAT: Log error but don't crash — analytics loss is acceptable
-    // WHY: Query logging should never block or crash the MCP server
+    // WHAT: Log the error but never throw — analytics loss is acceptable
+    // WHY: Query logging must never block or crash a tool response
     console.error(
-      `Query log flush failed (${entries.length} entries lost):`,
+      "Query log write failed (1 entry lost):",
       err instanceof Error ? err.message : err
     );
   }
 }
 
 export function closeQueryLog(): void {
-  if (flushTimer) {
-    clearInterval(flushTimer);
-    flushTimer = null;
-  }
-
-  flushBuffer(); // Final flush
-
   if (logDb) {
+    // WHAT: close() checkpoints the WAL back into the main db on the last connection
+    // WHY: Leaves the db clean; idempotent so signal + beforeExit + fatal paths can all call it
     logDb.close();
     logDb = null;
   }
+  insertStmt = null;
+}
+
+// WHAT: Flush-and-close on every shutdown path, including signal-kill
+// WHY: 'beforeExit' never fires when the process is terminated by a signal (the usual
+//      stdio MCP teardown). Entries are already durable per-insert, so these handlers
+//      exist to checkpoint the WAL and close cleanly — defense in depth, not a rescue.
+function registerShutdownHandlers(): void {
+  if (handlersRegistered) return;
+  handlersRegistered = true;
+
+  // Natural exit (event loop drains): close cleanly.
+  process.on("beforeExit", closeQueryLog);
+
+  // Signal-kill (the real stdio teardown path): close, then re-raise so the process
+  // terminates with the conventional 128+signal code. once() removes our listener
+  // before the body runs, so re-raising falls through to Node's default disposition.
+  const shutdown = (signal: NodeJS.Signals) => {
+    closeQueryLog();
+    process.kill(process.pid, signal);
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }

@@ -6,6 +6,8 @@ dist/
 .firecrawl/
 .mcpregistry_*
 data/query-log.db
+data/query-log.db-wal
+data/query-log.db-shm
 data/citation-test.db
 data/alerts.db
 data/discovery.db

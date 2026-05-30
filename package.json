@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "node --import tsx --test \"src/__tests__/**/*.test.ts\"",
     "ingest": "tsx src/ingest.ts",
     "ingest-projects": "tsx src/ingest-projects.ts",
     "ingest-drafts": "tsx src/ingest-drafts.ts",
