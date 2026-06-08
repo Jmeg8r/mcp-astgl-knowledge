@@ -22,7 +22,7 @@
     "structure": "tsx src/structure.ts",
     "pipeline": "tsx src/pipeline.ts",
     "citation-test": "tsx src/citation-test.ts",
-    "citation-test-auto": "tsx src/citation-test-auto.ts",
+    "citation-test-auto": "pass-cli run --env-file .env -- tsx src/citation-test-auto.ts",
     "daily-report": "tsx src/daily-report.ts",
     "alerts": "tsx src/alerts.ts",
     "freshness": "tsx src/freshness.ts",

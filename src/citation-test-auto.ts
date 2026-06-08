@@ -300,6 +300,20 @@ async function runEngine(engine: Engine, db: InstanceType<typeof Database>): Pro
   const tested = questions.length - errors;
   const rate = tested > 0 ? Math.round((cited / tested) * 100) : 0;
   console.error(`\n${engine}: ${cited}/${tested} cited (${rate}%) — ${errors} errors`);
+
+  // WHAT: If every question errored, the run is broken (e.g. a 401 auth failure),
+  //       not a legitimate 0% citation result. Roll back the inserted rows and
+  //       throw so the run fails loudly with a non-zero exit.
+  // WHY: test_results rows with cited=0 are counted as "tested" by the report in
+  //      citation-test.ts, so a fully-failed run otherwise masquerades as real
+  //      "0% / tested 20" data and silently skews historical AEO reporting.
+  if (questions.length > 0 && errors === questions.length) {
+    db.prepare("DELETE FROM test_results WHERE run_id = ?").run(runId);
+    db.prepare("DELETE FROM test_runs WHERE id = ?").run(runId);
+    throw new Error(
+      `${engine}: all ${errors} queries failed — run #${runId} discarded (check API keys / connectivity)`
+    );
+  }
 }
 
 async function main(): Promise<void> {
