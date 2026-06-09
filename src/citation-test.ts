@@ -6,7 +6,7 @@
  * WHY: Measures AEO effectiveness — if articles aren't being cited, strategy needs adjustment
  *
  * Usage:
- *   npm run citation-test -- init          Initialize DB + seed 20 target questions
+ *   npm run citation-test -- init          Initialize DB + seed target questions
  *   npm run citation-test -- record        Interactive: record results for a test run
  *   npm run citation-test -- report        Generate citation report (latest + trends)
  *   npm run citation-test -- questions     List all target questions
@@ -19,8 +19,9 @@ import { createInterface } from "readline";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "citation-test.db");
 
-// WHAT: The 20 target questions derived from ASTGL answer articles
-// WHY: These map 1:1 to the knowledge base — if AEO works, these should surface ASTGL
+// WHAT: Target questions derived from ASTGL content — astgl.ai answer articles
+//       plus tools.astgl.ai "best AI tool for X" comparison pages.
+// WHY: These map to published pages — if AEO works, these should surface ASTGL.
 const TARGET_QUESTIONS: Array<{ question: string; expectedUrl: string }> = [
   { question: "What is an MCP server and how does it work?", expectedUrl: "https://astgl.ai/answers/what-is-an-mcp-server" },
   { question: "How do I build my first MCP server?", expectedUrl: "https://astgl.ai/answers/build-your-first-mcp-server" },
@@ -42,6 +43,17 @@ const TARGET_QUESTIONS: Array<{ question: string; expectedUrl: string }> = [
   { question: "How do I automate workflows with AI agents?", expectedUrl: "https://astgl.ai/answers/automate-workflows-with-ai-agents" },
   { question: "How do I automate business workflows with AI?", expectedUrl: "https://astgl.ai/answers/automate-business-workflows-with-ai" },
   { question: "How do I build an AI pipeline for content creation?", expectedUrl: "https://astgl.ai/answers/build-ai-pipeline-for-content-creation" },
+
+  // tools.astgl.ai — "best AI tool for [dev use case]" comparison pages.
+  // These target the programmatic comparison site, not the astgl.ai answer base.
+  { question: "What's the best AI tool for code review?", expectedUrl: "https://tools.astgl.ai/use-cases/code-review" },
+  { question: "What AI tool is best for finding security vulnerabilities in code?", expectedUrl: "https://tools.astgl.ai/use-cases/finding-security-vulnerabilities" },
+  { question: "What's the best AI tool for pair programming?", expectedUrl: "https://tools.astgl.ai/use-cases/pair-programming" },
+  { question: "Which AI tool is best for writing pull request descriptions?", expectedUrl: "https://tools.astgl.ai/use-cases/writing-pr-descriptions" },
+  { question: "What's the best AI tool for writing unit tests?", expectedUrl: "https://tools.astgl.ai/use-cases/writing-unit-tests" },
+  { question: "What's the best AI tool for refactoring legacy code?", expectedUrl: "https://tools.astgl.ai/use-cases/refactoring-legacy-code" },
+  { question: "What AI tool helps with accessibility audits?", expectedUrl: "https://tools.astgl.ai/use-cases/accessibility-audits" },
+  { question: "Is Kilo Code Reviewer good for code review?", expectedUrl: "https://tools.astgl.ai/kilo-kilo-code-reviewer/code-review" },
 ];
 
 const ENGINES = ["perplexity", "chatgpt", "claude"] as const;
@@ -105,7 +117,9 @@ function seedQuestions(db: InstanceType<typeof Database>): void {
       // WHY: Groups questions by topic cluster for per-category reporting
       const slug = q.expectedUrl.split("/").pop() || "";
       let category = "general";
-      if (slug.includes("mcp")) category = "mcp-servers";
+      // tools.astgl.ai comparison pages form their own reporting cluster.
+      if (q.expectedUrl.includes("tools.astgl.ai")) category = "dev-tools";
+      else if (slug.includes("mcp")) category = "mcp-servers";
       else if (
         slug.includes("ollama") ||
         slug.includes("local") ||
@@ -368,7 +382,7 @@ async function main() {
   switch (command) {
     case "init":
       seedQuestions(db);
-      console.error("Citation test DB initialized with 20 target questions.");
+      console.error(`Citation test DB initialized with ${TARGET_QUESTIONS.length} target questions.`);
       listQuestions(db);
       break;
     case "record":
