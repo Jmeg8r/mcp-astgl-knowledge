@@ -56,7 +56,9 @@ const TARGET_QUESTIONS: Array<{ question: string; expectedUrl: string }> = [
   { question: "Is Kilo Code Reviewer good for code review?", expectedUrl: "https://tools.astgl.ai/kilo-kilo-code-reviewer/code-review" },
 ];
 
-const ENGINES = ["perplexity", "chatgpt", "claude"] as const;
+// Engines we manually test. "google" = Google AI Overviews (the AI answer box on
+// Google Search) — the largest AI answer surface, per the AEO playbook.
+const ENGINES = ["perplexity", "chatgpt", "claude", "google"] as const;
 type Engine = (typeof ENGINES)[number];
 
 function initDb(): InstanceType<typeof Database> {
