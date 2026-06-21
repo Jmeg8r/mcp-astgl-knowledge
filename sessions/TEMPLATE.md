@@ -37,6 +37,6 @@ _Paste relevant test/lint output._
 _Constraints recorded this session (via `/gstack-learn add`), then `./refresh-digest.sh`
 to update CLAUDE.md's "Known Patterns" table. Write constraints, not observations._
 
-| Key | Type | Confidence | Summary |
-|-----|------|-----------|---------|
+| Key | Type | Conf | Insight |
+|-----|------|------|---------|
 | `key-name` | pattern | 8 | … |

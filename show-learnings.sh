@@ -63,6 +63,8 @@ jq -rs '
 ' "$LEARNINGS_FILE"
 
 echo ""
-TOTAL=$(jq -rs 'group_by(.key + "|" + .type) | length' "$LEARNINGS_FILE")
-echo "Total: ${TOTAL} learning(s)"
+# WHAT: count the SAME deduped+filtered set that was printed, so the total can't
+#       contradict the rows shown when a filter is active.
+TOTAL=$(jq -rs '[ group_by(.key + "|" + .type) | map(max_by(.ts // ""))[] | '"$SEL"' ] | length' "$LEARNINGS_FILE")
+echo "Total: ${TOTAL} learning(s)${FILTER:+ (filter: $FILTER)}"
 echo ""

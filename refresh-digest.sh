@@ -25,6 +25,12 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required." >&2; exit 1; }
 [ -f "$CLAUDE_FILE" ] || { echo "No $CLAUDE_FILE here." >&2; exit 1; }
 grep -q '<!-- LEARNINGS:START -->' "$CLAUDE_FILE" || {
   echo "No LEARNINGS markers in $CLAUDE_FILE — run compound-init.sh first." >&2; exit 1; }
+# WHAT: both markers must exist and be ordered. The awk splice below keeps skip=1
+#       until it sees END, so a missing or misordered END would truncate the file.
+_start=$(grep -n '<!-- LEARNINGS:START -->' "$CLAUDE_FILE" | head -1 | cut -d: -f1 || true)
+_end=$(grep -n '<!-- LEARNINGS:END -->' "$CLAUDE_FILE" | head -1 | cut -d: -f1 || true)
+[ -n "$_end" ] || { echo "Missing <!-- LEARNINGS:END --> marker in $CLAUDE_FILE." >&2; exit 1; }
+[ "$_start" -lt "$_end" ] || { echo "LEARNINGS markers out of order in $CLAUDE_FILE." >&2; exit 1; }
 
 SLUG_BIN="$(resolve_slug_bin)" || { echo "gstack-slug not found." >&2; exit 1; }
 SLUG=""
@@ -65,6 +71,7 @@ fi
 
 # WHAT: splice TABLE between the markers, preserving everything else. Idempotent.
 TMP="$(mktemp)"
+[ -r "$TABLE" ] || { echo "Digest table file unreadable before splice — aborting." >&2; exit 1; }
 awk -v rf="$TABLE" '
   /<!-- LEARNINGS:START -->/ { print; while ((getline line < rf) > 0) print line; close(rf); skip=1; next }
   /<!-- LEARNINGS:END -->/   { skip=0; print; next }
