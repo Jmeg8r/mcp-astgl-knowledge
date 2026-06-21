@@ -21,3 +21,23 @@ cd ~/Projects/gstack && ./setup --prefix --team
 **Browser:** use `/browse` (gstack's persistent Chromium binary) for web work.
 
 **Learnings:** project-specific operational learnings persist at `~/.gstack/projects/mcp-astgl-knowledge/learnings.jsonl` and are auto-surfaced in skill preambles.
+
+<!-- COMPOUND:START -->
+## Compound Engineering Setup
+
+Learnings are captured by gstack into `~/.gstack/projects/<slug>/learnings.jsonl` and
+auto-loaded into context at session start. This repo commits only the human-readable
+digest below — the gstack store is the source of truth.
+
+- **View learnings offline:** `./show-learnings.sh` (also `high`, or a type filter)
+- **Record a constraint:** `/gstack-learn add` (write constraints, not observations)
+- **Refresh the table below** after a session's Compound step: `./refresh-digest.sh`
+- **Session logs:** copy `sessions/TEMPLATE.md` → `sessions/SESSION-NNN-<title>.md` and
+  follow Brainstorm → Plan → Work → Review → Compound.
+
+## Known Patterns
+
+<!-- LEARNINGS:START -->
+_No learnings yet. Run `/gstack-learn add` during a session, then `./refresh-digest.sh`._
+<!-- LEARNINGS:END -->
+<!-- COMPOUND:END -->

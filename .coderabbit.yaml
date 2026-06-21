@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review policy. Pairs with the GitHub "require conversation resolution
+# before merging" branch ruleset: CodeRabbit reviews every PR and requests changes until
+# its comments are resolved (implemented, or replied-to with a reason and marked
+# resolved), so a valid finding can't be merged past silently.
+language: en-US
+reviews:
+  profile: assertive               # thorough, high-signal findings
+  request_changes_workflow: true   # withhold approval until comments are resolved
+  auto_review:
+    enabled: true                  # review automatically on PR open/update
