@@ -32,7 +32,7 @@ import { initKnowledgeDb, deleteArticle, closeKnowledgeDb } from "./knowledge-db
 
 const DRAFTS_DIR =
   process.env.ASTGL_DRAFTS_DIR ||
-  join(process.env.HOME || "~", "Projects", "astgl-articles", "substack");
+  "/Volumes/Research/ASTGL Articles/Drafts";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 const DRAFT_URL_PREFIX = "local://astgl-articles/draft/";
@@ -128,6 +128,21 @@ async function main() {
 
   if (!existsSync(DB_PATH)) {
     console.error(`Knowledge database not found at ${DB_PATH}`);
+    process.exit(1);
+  }
+
+  // WHAT: Refuse to reconcile if the drafts root is missing entirely.
+  // WHY: The archive lives on an external volume (/Volumes/Research). If that
+  //      drive is unmounted when this runs, every folder would look "missing"
+  //      and ALL drafts would be hard-deleted. Aborting is the safe default —
+  //      a genuinely empty/removed root should be handled deliberately, not by
+  //      a 2am cron firing against an unmounted disk.
+  if (!existsSync(DRAFTS_DIR)) {
+    console.error(
+      `Drafts root not found: ${DRAFTS_DIR}\n` +
+        `Refusing to reconcile — the volume may be unmounted. No rows deleted.\n` +
+        `If the drafts directory has genuinely moved, set ASTGL_DRAFTS_DIR or update the default.`
+    );
     process.exit(1);
   }
 

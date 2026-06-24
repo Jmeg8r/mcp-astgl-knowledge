@@ -45,6 +45,9 @@ function runMigrations(database: InstanceType<typeof Database>): void {
     "ALTER TABLE articles ADD COLUMN pub_date TEXT",
     "ALTER TABLE articles ADD COLUMN last_reviewed_at TEXT",
     "ALTER TABLE articles ADD COLUMN freshness_status TEXT DEFAULT 'current'",
+    // WHAT: Curated tags as a JSON array string (e.g. '["Python","MCP"]').
+    // WHY: Lets find_articles filter by tag without re-deriving from chunk text.
+    "ALTER TABLE articles ADD COLUMN tags TEXT DEFAULT '[]'",
   ];
 
   for (const sql of alterColumns) {
@@ -57,6 +60,9 @@ function runMigrations(database: InstanceType<typeof Database>): void {
 
   database.exec(
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url)"
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_articles_content_type ON articles(content_type)"
   );
 
   database.exec(`
@@ -239,12 +245,20 @@ export function upsertArticle(
     .prepare("SELECT id FROM articles WHERE url = ?")
     .get(article.url) as { id: number } | undefined;
 
+  // WHAT: Only overwrite tags when the caller provides them (COALESCE keeps
+  //       existing tags if this upsert doesn't carry any), so re-ingesting a
+  //       source that lacks tags never wipes previously-stored tags.
+  const tagsJson =
+    article.tags && article.tags.length > 0
+      ? JSON.stringify(article.tags)
+      : null;
+
   if (existing) {
     database
       .prepare(
         `UPDATE articles SET title = ?, description = ?, slug = ?,
          source_url = ?, content_type = ?, json_ld = ?, processed_at = ?,
-         pub_date = COALESCE(?, pub_date)
+         pub_date = COALESCE(?, pub_date), tags = COALESCE(?, tags)
          WHERE id = ?`
       )
       .run(
@@ -256,13 +270,14 @@ export function upsertArticle(
         article.jsonLd,
         article.processedAt,
         article.pubDate || null,
+        tagsJson,
         existing.id
       );
   } else {
     database
       .prepare(
-        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date, tags)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         article.title,
@@ -273,7 +288,8 @@ export function upsertArticle(
         article.contentType,
         article.jsonLd,
         article.processedAt,
-        article.pubDate || null
+        article.pubDate || null,
+        tagsJson ?? "[]"
       );
   }
 }

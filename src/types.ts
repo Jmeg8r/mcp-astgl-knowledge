@@ -106,6 +106,9 @@ export interface StructuredArticle {
   markdownBody: string;
   processedAt: string;
   pubDate?: string;
+  // WHAT: Curated tags (from seo.md / frontmatter) stored as a queryable field.
+  // WHY: Enables structured "find articles tagged X" search via find_articles.
+  tags?: string[];
 }
 
 export const EMBEDDING_DIM = 768;

@@ -29,9 +29,12 @@ import type { StructuredArticle, Chunk } from "./types.js";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
+// WHAT: Drafts now live on the Research drive, split into Drafts/ and Published/.
+// WHY: The archive was relocated off the repo; this points the ingester at the
+//      unpublished drafts. Override with ASTGL_DRAFTS_DIR if the path differs.
 const DRAFTS_DIR =
   process.env.ASTGL_DRAFTS_DIR ||
-  join(process.env.HOME || "~", "Projects", "astgl-articles", "substack");
+  "/Volumes/Research/ASTGL Articles/Drafts";
 
 const DATE_SLUG_RE = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 
@@ -202,6 +205,61 @@ function chunkLedger(moments: ProcessedMoment[]): Chunk[] {
   return chunks;
 }
 
+// WHAT: Pull curated tags (and a better title/description when available) from a
+//       draft folder's article.md YAML frontmatter and its seo.md sidecar.
+// WHY:  Many drafts store the real title/tags in frontmatter or seo.md rather
+//       than an H1; surfacing them makes find_articles / list_tags useful.
+function extractDraftMeta(folder: string): {
+  title?: string;
+  description?: string;
+  tags: string[];
+} {
+  const tags = new Set<string>();
+  let title: string | undefined;
+  let description: string | undefined;
+
+  // article.md frontmatter
+  const articlePath = join(folder, "article.md");
+  if (existsSync(articlePath)) {
+    const raw = readFileSync(articlePath, "utf-8");
+    const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (fm) {
+      const block = fm[1];
+      const t = block.match(/^\s*(?:title|seo_title)\s*:\s*(.+?)\s*$/m);
+      if (t) title = t[1].replace(/^['"]|['"]$/g, "").trim() || undefined;
+      const d = block.match(/^\s*(?:description|subtitle)\s*:\s*(.+?)\s*$/m);
+      if (d) description = d[1].replace(/^['"]|['"]$/g, "").trim() || undefined;
+      // tags: [a, b] OR a YAML list on following lines
+      const inline = block.match(/^\s*tags\s*:\s*\[(.+?)\]\s*$/m);
+      if (inline) {
+        for (const t of inline[1].split(","))
+          { const v = t.replace(/['"]/g, "").trim(); if (v) tags.add(v); }
+      } else {
+        const listMatch = block.match(/^\s*tags\s*:\s*\n((?:\s*-\s*.+\n?)+)/m);
+        if (listMatch)
+          for (const line of listMatch[1].split("\n")) {
+            const v = line.replace(/^\s*-\s*/, "").replace(/['"]/g, "").trim();
+            if (v) tags.add(v);
+          }
+      }
+    }
+  }
+
+  // seo.md "Substack Tags" / "Tags" bullet list
+  const seoPath = join(folder, "seo.md");
+  if (existsSync(seoPath)) {
+    const seo = readFileSync(seoPath, "utf-8");
+    const tm = seo.match(/#+\s*(?:Substack\s+)?Tags\s*\n((?:\s*[-*]\s*.+\n?)+)/i);
+    if (tm)
+      for (const line of tm[1].split("\n")) {
+        const v = line.replace(/^\s*[-*]\s*/, "").trim();
+        if (v) tags.add(v);
+      }
+  }
+
+  return { title, description, tags: [...tags] };
+}
+
 function listDraftFolders(root: string): string[] {
   if (!existsSync(root)) return [];
   return readdirSync(root)
@@ -246,6 +304,11 @@ async function main() {
 
     console.error(`  Processing: ${folderName}`);
     const parsed = parseDraft(folder, articlePath);
+    // WHAT: Enrich with frontmatter/seo.md title, description, and tags.
+    // WHY: Better metadata for find_articles + list_tags than an H1 alone.
+    const meta = extractDraftMeta(folder);
+    if (meta.title) parsed.title = meta.title;
+    if (meta.description) parsed.description = meta.description;
     const chunks = chunkDraft(slug, url, parsed);
     const embeddings = await embed(chunks.map((c) => c.content));
 
@@ -258,6 +321,7 @@ async function main() {
       author: "James Cruce",
       contentType: "draft",
       topics: ["draft", "unpublished", "astgl", slugPart.replace(/-/g, " ")],
+      tags: meta.tags,
       qaPairs: [],
       jsonLd: JSON.stringify({
         "@context": "https://schema.org",
