@@ -81,22 +81,57 @@ async function ollamaDraft(input: RewriteInput): Promise<{ text: string; ms: num
     "---",
   ].join("\n");
 
-  const start = Date.now();
-  const resp = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_REWRITE_MODEL,
-      prompt,
-      stream: false,
-      options: {
-        // Generous output budget — long-form ASTGL articles run ~2-4K tokens.
-        num_predict: 6000,
-        temperature: 0.5,
-      },
-    }),
-    signal: AbortSignal.timeout(15 * 60 * 1000), // 15 min — local models can be slow
+  const requestBody = JSON.stringify({
+    model: OLLAMA_REWRITE_MODEL,
+    prompt,
+    stream: false,
+    options: {
+      // Generous output budget — long-form ASTGL articles run ~2-4K tokens.
+      num_predict: 6000,
+      temperature: 0.5,
+    },
   });
+
+  // WHAT: retry the Ollama call on connection-level failures.
+  // WHY:  The Mac Studio Ollama host juggles 20-65GB models, so a rewrite that
+  //       cold-loads qwen3-coder:30b can have its socket refused or reset mid-
+  //       swap, surfacing as a bare `TypeError: fetch failed` (the exact symptom
+  //       that failed the daily rewrite-queue). That is transient — a short
+  //       backoff lets the load finish, then the retry succeeds. We do NOT retry
+  //       HTTP errors (4xx/5xx are deterministic) or the AbortSignal timeout (a
+  //       genuine 15-min stall is not fixed by trying again).
+  const MAX_ATTEMPTS = 3;
+  const start = Date.now();
+  let resp: Awaited<ReturnType<typeof fetch>> | undefined;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      resp = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+        // 15 min — local models can be slow; fresh signal each attempt.
+        signal: AbortSignal.timeout(15 * 60 * 1000),
+      });
+      break;
+    } catch (err) {
+      const isTimeout =
+        err instanceof Error &&
+        (err.name === "TimeoutError" || err.name === "AbortError");
+      if (isTimeout || attempt === MAX_ATTEMPTS) throw err;
+      const waitMs = 3000 * attempt;
+      console.error(
+        `  ollama fetch attempt ${attempt}/${MAX_ATTEMPTS} failed ` +
+          `(${err instanceof Error ? err.message : String(err)}); ` +
+          `retrying in ${waitMs}ms`
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  // The loop either breaks with a response or throws on the final attempt;
+  // this guard just narrows the type for the checks below.
+  if (!resp) {
+    throw new Error("ollama draft failed: exhausted retries with no response");
+  }
 
   const ms = Date.now() - start;
 
