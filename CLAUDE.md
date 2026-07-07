@@ -312,6 +312,15 @@ cd ~/Projects/gstack && ./setup --prefix --team
 `~/.gstack/projects/mcp-astgl-knowledge/learnings.jsonl` and are auto-surfaced in
 skill preambles.
 
-**Project skills** (in `.claude/skills/`): `/astgl-ops-triage` (pipeline health
-diagnosis), `/astgl-new-job` (scaffold + ship a scheduled job end-to-end),
-`/astgl-db-surgeon` (safe knowledge.db operations).
+## Project skills (repo-local)
+
+Distinct from the gstack suite above (which is installed globally at
+`~/.claude/skills/` with the `gstack-` prefix), these are committed in this repo
+under `.claude/skills/`:
+
+- `/astgl-ops-triage` — pipeline health diagnosis: read-only sweep + known-failure
+  signature table.
+- `/astgl-new-job` — scaffold and ship a scheduled job end-to-end: script contract →
+  plist → Maester descriptor → bootstrap + smoke test.
+- `/astgl-db-surgeon` — safe `knowledge.db` operations: integrity checks, article
+  retirement, re-index routing, WAL checkpoints, backup management.

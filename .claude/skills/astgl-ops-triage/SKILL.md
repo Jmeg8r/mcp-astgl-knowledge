@@ -32,10 +32,16 @@ A log older than one full period = the job didn't fire or crashed before logging
 **3. Stale dist check** (production runs `dist/*.js`; a newer `src/` file means
 production is running old code):
 ```bash
-newest_src=$(ls -t src/*.ts | head -1); newest_dist=$(ls -t dist/*.js | head -1)
-ls -l "$newest_src" "$newest_dist"
+for s in src/*.ts; do
+  d="dist/$(basename "${s%.ts}").js"
+  if [ ! -f "$d" ]; then echo "NO DIST: $s (never built)"
+  elif [ "$s" -nt "$d" ]; then echo "STALE: $s newer than $d"; fi
+done
 ```
-If any `src/*.ts` mtime > its `dist/*.js` counterpart, flag STALE DIST.
+Compares each source file against its own compiled artifact (a global newest-file
+comparison misses stale pairs). Any `STALE`/`NO DIST` line = flag STALE DIST.
+`NO DIST` for a script that only ever runs via `tsx` is acceptable — say so explicitly
+rather than ignoring it.
 
 **4. Dependencies:**
 ```bash
@@ -98,6 +104,11 @@ Produce a compact health report in this exact shape:
 4. **Proposed fixes**, split into "safe, will do now if you confirm" vs "needs your
    call" (per the escalation rules in CLAUDE.md — launchd changes, deletions, and
    anything outward-facing always need James's call).
+
+**Sharing boundary:** raw log excerpts, draft URLs, and `rewrite_jobs.article_url`
+values are fine in the local chat report to James, but if any part of the report
+leaves this machine (PR body, GitHub issue, Discord), replace them with counts and
+error *signatures* — unpublished draft titles/URLs are pre-publication content.
 
 Do NOT auto-apply fixes in this skill. Triage ends at the report; fixing is a
 separate, approved step.

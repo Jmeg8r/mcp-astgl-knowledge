@@ -15,8 +15,11 @@ Ask James, one at a time, only what the request leaves open:
 1. Schedule (exact times — launchd uses `StartCalendarInterval`, not cron strings) and
    whether it must order against existing jobs (00:00 drafts → 00:30 wiki → 02:00 reconciler).
 2. Does it write `knowledge.db`? (→ must use `knowledge-db.ts` upserts) Delete anything?
-   (→ needs `--dry-run` + backup) Touch `/Volumes/Research`? (→ needs a mount guard;
-   ask whether skip-clean or refuse-loudly semantics fit).
+   (→ needs `--dry-run` AND the backup contract: copy to
+   `data/knowledge.db.bak.<name>-<ISO timestamp>` before the first delete, with a
+   `--no-backup` opt-out — replicate `reconcile-drafts.ts` exactly) Touch
+   `/Volumes/Research`? (→ needs a mount guard; ask whether skip-clean or
+   refuse-loudly semantics fit).
 3. Does it need secrets? (→ pass-cli wrapper in package.json, placeholders in `.env.example`)
    Message humans (Telegram/Discord)? (→ flag: outward-facing, test path must be silent).
 
@@ -43,6 +46,7 @@ import { initKnowledgeDb, closeKnowledgeDb } from "./knowledge-db.js";
 
 const FLAGS = {
   dryRun: process.argv.includes("--dry-run"),
+  noBackup: process.argv.includes("--no-backup"), // only for jobs that delete rows
 };
 
 async function main() {
@@ -52,6 +56,11 @@ async function main() {
   // optional sync   → exit 0 + {skipped:true} (pattern: sync-wiki.ts)
   // destructive job → refuse, exit 1          (pattern: reconcile-drafts.ts)
   // if (!existsSync("/Volumes/Research")) { ... }
+
+  // Backup contract — REQUIRED if this job deletes or overwrites knowledge.db rows:
+  // before the first write, copy data/knowledge.db →
+  // data/knowledge.db.bak.<name>-<ISO timestamp>, skipped only by --no-backup
+  // (pattern: reconcile-drafts.ts). Read-only and pure-upsert jobs omit this.
 
   let processed = 0, skipped = 0, failed = 0;
 
@@ -81,8 +90,16 @@ Add to `package.json` scripts: plain `"<name>": "tsx src/<name>.ts"`, or
 `"<name>": "pass-cli run --env-file .env -- node dist/<name>.js"` if it needs secrets
 (match `rewrite-queue`'s pattern exactly).
 
-**Verify:** `npm run <name> -- --dry-run` on real data; confirm stderr is readable and
-stdout is exactly one JSON line (`npm run <name> -- --dry-run 2>/dev/null | jq .`).
+**Verify** on real data, against the production runtime (`node dist/`, not npm — the
+npm banner and local shell shims pollute stdout and break the count):
+```bash
+npm run build
+out=$(node dist/<name>.js --dry-run 2>/dev/null)
+[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && printf '%s' "$out" | jq -e . >/dev/null \
+  && echo "stdout contract OK" || echo "FAIL: stdout must be exactly ONE valid JSON line"
+```
+Also eyeball `node dist/<name>.js --dry-run 2>&1 >/dev/null | head` to confirm stderr
+progress is readable.
 
 ## Step 2 — The launchd plist (`launchd/ai.astgl.knowledge.<name>.plist`)
 

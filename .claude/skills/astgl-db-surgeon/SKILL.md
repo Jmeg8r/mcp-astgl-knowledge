@@ -115,13 +115,16 @@ Re-run the integrity check; report before/after counts.
 ## Recipe: WAL checkpoint (before copying/committing a DB)
 
 WAL sidecars (`-wal`/`-shm`) hold un-checkpointed writes; a bare `cp file.db` can
-snapshot a stale or inconsistent state.
+snapshot a stale or inconsistent state. Checkpoint **the DB you are about to copy or
+commit** — substitute its actual filename:
 ```bash
-sqlite3 data/query-log.db "PRAGMA wal_checkpoint(TRUNCATE);"
+ls "data/<db>.db-wal" "data/<db>.db-shm" 2>/dev/null   # sidecars present?
+sqlite3 "data/<db>.db" "PRAGMA wal_checkpoint(TRUNCATE);"
 ```
-Safe anytime (readers/writers tolerate it). Do this before backing up any DB that has
-sidecars, and note that `knowledge.db` is git-tracked — a checkpoint can change the
-file git sees.
+(As of 2026-07 only `query-log.db` runs in WAL mode, but check for sidecars rather
+than assuming.) Safe anytime — readers/writers tolerate it. Do this before backing up
+any DB that has sidecars, including `knowledge.db` before committing it: it's
+git-tracked, and a checkpoint changes the file git sees.
 
 ## Recipe: Backup pruning (ask-first — this deletes files)
 
