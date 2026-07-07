@@ -284,9 +284,10 @@ from the actual data before designing anything — this is the standing lesson i
 - `ASTGL_DRAFTS_DIR` defaults diverge: ingest/reconcile → `/Volumes/Research/ASTGL
   Articles/Drafts`; rewrite-queue/.env.example → `~/Projects/astgl-articles/substack`.
   Set the env var explicitly; never rely on the default.
-- `.claude/settings.local.json` embeds a literal Asana PAT in an allow rule
-  (gitignored, but should move to pass).
 - `data/*.bak.*` backups accumulate unbounded (~200 MB and growing).
+- Asana was retired entirely (2026-07-07): the PAT and `mcp__claude_ai_Asana__*`
+  allow rules were removed from `.claude/settings.local.json`; the Teams-to-Asana
+  bridge no longer exists. Don't suggest Asana integrations here.
 
 ## gstack
 
