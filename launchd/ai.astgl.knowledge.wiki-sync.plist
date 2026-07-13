@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.astgl.knowledge.wiki-sync</string>
+
+    <key>Comment</key>
+    <string>Nightly sync of ASTGL-tagged SecondBrain wiki pages into knowledge.db (00:30 daily)</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/jamescruce/.nvm/versions/node/v24.14.0/bin/node</string>
+      <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/dist/sync-wiki.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/Users/jamescruce/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+      <key>Hour</key>
+      <integer>0</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/wiki-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/wiki-sync.err.log</string>
+  </dict>
+</plist>

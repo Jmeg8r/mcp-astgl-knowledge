@@ -48,6 +48,7 @@ function runMigrations(database: InstanceType<typeof Database>): void {
     // WHAT: Curated tags as a JSON array string (e.g. '["Python","MCP"]').
     // WHY: Lets find_articles filter by tag without re-deriving from chunk text.
     "ALTER TABLE articles ADD COLUMN tags TEXT DEFAULT '[]'",
+    "ALTER TABLE articles ADD COLUMN source_origin TEXT DEFAULT 'astgl-site'",
   ];
 
   for (const sql of alterColumns) {
@@ -63,6 +64,9 @@ function runMigrations(database: InstanceType<typeof Database>): void {
   );
   database.exec(
     "CREATE INDEX IF NOT EXISTS idx_articles_content_type ON articles(content_type)"
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_articles_source_origin ON articles(source_origin)"
   );
 
   database.exec(`
@@ -258,7 +262,8 @@ export function upsertArticle(
       .prepare(
         `UPDATE articles SET title = ?, description = ?, slug = ?,
          source_url = ?, content_type = ?, json_ld = ?, processed_at = ?,
-         pub_date = COALESCE(?, pub_date), tags = COALESCE(?, tags)
+         pub_date = COALESCE(?, pub_date), tags = COALESCE(?, tags),
+         source_origin = COALESCE(?, source_origin)
          WHERE id = ?`
       )
       .run(
@@ -271,13 +276,14 @@ export function upsertArticle(
         article.processedAt,
         article.pubDate || null,
         tagsJson,
+        article.sourceOrigin || null,
         existing.id
       );
   } else {
     database
       .prepare(
-        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date, tags)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date, tags, source_origin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         article.title,
@@ -289,7 +295,8 @@ export function upsertArticle(
         article.jsonLd,
         article.processedAt,
         article.pubDate || null,
-        tagsJson ?? "[]"
+        tagsJson ?? "[]",
+        article.sourceOrigin || "astgl-site"
       );
   }
 }

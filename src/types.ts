@@ -77,7 +77,7 @@ export interface LatestArticle {
 }
 
 // Content structuring types
-export type ContentType = "article" | "tutorial" | "faq" | "comparison" | "guide" | "newsletter" | "project" | "draft";
+export type ContentType = "article" | "tutorial" | "faq" | "comparison" | "guide" | "newsletter" | "project" | "draft" | "concept" | "entity" | "synthesis";
 
 export interface QaPair {
   question: string;
@@ -109,6 +109,7 @@ export interface StructuredArticle {
   // WHAT: Curated tags (from seo.md / frontmatter) stored as a queryable field.
   // WHY: Enables structured "find articles tagged X" search via find_articles.
   tags?: string[];
+  sourceOrigin?: string;
 }
 
 export const EMBEDDING_DIM = 768;
