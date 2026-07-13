@@ -25,9 +25,10 @@ obeying the premise would have destroyed 27 current drafts.
 4. **Surface the contradiction; let the human pick direction.** Don't silently "fix" the plist or the
    code once the data disproves the premise — the choice (retire substack vs keep it) is the user's.
 5. **Sequence to remove the deletion window.** Once "make Research canonical" was chosen:
-   back up → sync data so the target is complete → re-verify 0 deletions via `--dry-run` against a
-   copy → redirect PRODUCERS as well as consumers → install launchd against freshly-built dist →
-   kickstart-verify live.
+   back up → sync data so the target is complete → redirect PRODUCERS as well as consumers →
+   re-verify 0 deletions via `--dry-run` against the *production* DB and the mounted target
+   filesystem (never a copy/worktree snapshot — they diverge and can falsely report zero) →
+   install launchd against freshly-built dist → kickstart-verify live.
 
 ## The judgment calls (what was NOT done, and why)
 
