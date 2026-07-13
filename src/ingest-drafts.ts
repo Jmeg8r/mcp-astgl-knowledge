@@ -2,7 +2,7 @@
 /**
  * Draft + topic-ledger ingestion.
  *
- * WHAT: Indexes pre-publication drafts from astgl-articles/substack/ and the
+ * WHAT: Indexes pre-publication drafts from the Research drive drafts archive and the
  *       processed-moments.json topic ledger into knowledge.db, tagged so they
  *       are clearly distinguishable from published astgl.ai content.
  * WHY:  Lets the MCP answer "have I drafted/written about X yet?" before we
@@ -12,7 +12,7 @@
  * Usage:
  *   npm run ingest-drafts
  *
- * Env: ASTGL_DRAFTS_DIR  — substack drafts root (default: ~/Projects/astgl-articles/substack)
+ * Env: ASTGL_DRAFTS_DIR  — drafts root (default: /Volumes/Research/ASTGL Articles/Drafts)
  *      OLLAMA_URL        — Ollama endpoint (default: http://localhost:11434)
  *      EMBED_MODEL       — embedding model (default: nomic-embed-text)
  */
