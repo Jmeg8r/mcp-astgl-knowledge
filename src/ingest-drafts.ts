@@ -278,9 +278,23 @@ function listDraftFolders(root: string): string[] {
 async function main() {
   console.error("=== ASTGL Draft + Topic Ledger Ingestion ===\n");
 
+  // WHAT: Skip cleanly if the drafts root is missing (e.g. Research drive unmounted).
+  // WHY:  This indexer is OPTIONAL and additive — unlike the destructive reconciler
+  //       (which refuses loudly with exit 1), a nightly run while the external volume
+  //       is unmounted should be a clean skip, not a logged failure. exit 0 with
+  //       {skipped:true} mirrors sync-wiki.ts.
   if (!existsSync(DRAFTS_DIR)) {
-    console.error(`Drafts directory not found: ${DRAFTS_DIR}`);
-    process.exit(1);
+    console.error(
+      `Drafts directory not found: ${DRAFTS_DIR} — external volume may be unmounted; skipping.`,
+    );
+    console.log(
+      JSON.stringify({
+        skipped: true,
+        reason: "volume_unmounted",
+        drafts_dir: DRAFTS_DIR,
+      }),
+    );
+    return;
   }
 
   const knowledgeDb = initKnowledgeDb();

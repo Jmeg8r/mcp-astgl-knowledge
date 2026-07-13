@@ -1,6 +1,6 @@
 {
   "name": "draft-reconciler",
-  "description": "Retires stale draft entries from knowledge.db whose source folder under astgl-articles/substack/ is gone (deleted or renamed Published_*). Runs 2h after the nightly drafts ingester so newly shipped pieces are retired the same night. Without this, MCP search returns the same content twice (rough draft + polished published version).",
+  "description": "Retires stale draft entries from knowledge.db whose source folder under /Volumes/Research/ASTGL Articles/Drafts/ is gone (deleted or renamed Published_*). Runs 2h after the nightly drafts ingester so newly shipped pieces are retired the same night. Without this, MCP search returns the same content twice (rough draft + polished published version).",
   "schedule": "0 2 * * *",
   "scheduleReadable": "Every night at 02:00",
   "preExec": {
