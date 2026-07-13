@@ -19,7 +19,7 @@
       <key>PATH</key>
       <string>/Users/jamescruce/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
       <key>ASTGL_DRAFTS_DIR</key>
-      <string>/Users/jamescruce/Projects/astgl-articles/substack</string>
+      <string>/Volumes/Research/ASTGL Articles/Drafts</string>
     </dict>
 
     <key>WorkingDirectory</key>

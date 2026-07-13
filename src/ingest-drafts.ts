@@ -2,7 +2,7 @@
 /**
  * Draft + topic-ledger ingestion.
  *
- * WHAT: Indexes pre-publication drafts from astgl-articles/substack/ and the
+ * WHAT: Indexes pre-publication drafts from the Research drive drafts archive and the
  *       processed-moments.json topic ledger into knowledge.db, tagged so they
  *       are clearly distinguishable from published astgl.ai content.
  * WHY:  Lets the MCP answer "have I drafted/written about X yet?" before we
@@ -12,7 +12,7 @@
  * Usage:
  *   npm run ingest-drafts
  *
- * Env: ASTGL_DRAFTS_DIR  — substack drafts root (default: ~/Projects/astgl-articles/substack)
+ * Env: ASTGL_DRAFTS_DIR  — drafts root (default: /Volumes/Research/ASTGL Articles/Drafts)
  *      OLLAMA_URL        — Ollama endpoint (default: http://localhost:11434)
  *      EMBED_MODEL       — embedding model (default: nomic-embed-text)
  */
@@ -278,6 +278,26 @@ function listDraftFolders(root: string): string[] {
 async function main() {
   console.error("=== ASTGL Draft + Topic Ledger Ingestion ===\n");
 
+  // WHAT: Skip cleanly ONLY when the drafts root is on an unmounted /Volumes mount.
+  // WHY:  This indexer is optional/additive, so a nightly run while the external
+  //       Research volume is unmounted should be a clean skip (exit 0), mirroring
+  //       sync-wiki.ts. But a missing root that is NOT an absent mount — a typo'd
+  //       ASTGL_DRAFTS_DIR or a deleted local dir — is a real error: fail loudly so
+  //       cron never "succeeds" while silently indexing nothing.
+  const volumeMatch = DRAFTS_DIR.match(/^(\/Volumes\/[^/]+)/);
+  if (volumeMatch && !existsSync(volumeMatch[1])) {
+    console.error(
+      `External volume not mounted at ${volumeMatch[1]} — skipping draft ingestion.`,
+    );
+    console.log(
+      JSON.stringify({
+        skipped: true,
+        reason: "volume_unmounted",
+        drafts_dir: DRAFTS_DIR,
+      }),
+    );
+    return;
+  }
   if (!existsSync(DRAFTS_DIR)) {
     console.error(`Drafts directory not found: ${DRAFTS_DIR}`);
     process.exit(1);

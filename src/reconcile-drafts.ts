@@ -3,7 +3,7 @@
  * Draft reconciler.
  *
  * WHAT: Retires (hard-deletes) draft entries from knowledge.db whose source
- *       folder under astgl-articles/substack/ has been removed or renamed with
+ *       folder under the Research drive drafts archive has been removed or renamed with
  *       a Published_* prefix — meaning the user has shipped the piece and the
  *       draft index entry is now stale.
  * WHY:  Without this, MCP search returns the same content twice (draft + the
@@ -22,7 +22,7 @@
  *   npm run reconcile-drafts -- --dry-run   # show what would be retired
  *   npm run reconcile-drafts -- --no-backup # skip the pre-run DB backup
  *
- * Env: ASTGL_DRAFTS_DIR — substack drafts root (default: ~/Projects/astgl-articles/substack)
+ * Env: ASTGL_DRAFTS_DIR — drafts root (default: /Volumes/Research/ASTGL Articles/Drafts)
  */
 
 import { existsSync, readdirSync, copyFileSync } from "fs";

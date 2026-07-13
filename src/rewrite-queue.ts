@@ -19,7 +19,7 @@
  *   ANTHROPIC_API_KEY            (required for live runs)
  *   OLLAMA_BASE_URL              (default http://localhost:11434)
  *   OLLAMA_REWRITE_MODEL         (default qwen3:32b-fast)
- *   ASTGL_DRAFTS_DIR             (default ~/Projects/astgl-articles/substack)
+ *   ASTGL_DRAFTS_DIR             (default /Volumes/Research/ASTGL Articles/Drafts)
  *   TELEGRAM_BOT_TOKEN           (required to send approval pings; skipped if absent)
  *   TELEGRAM_CHAT_ID             (single chat id for the approval ping)
  *   TELEGRAM_THREAD_ID           (optional forum-topic thread id)
@@ -28,7 +28,6 @@
 import "dotenv/config";
 import { join } from "path";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import {
   initKnowledgeDb,
   getStaleArticles,
@@ -43,12 +42,12 @@ import {
 } from "./db-rewrite-jobs.js";
 import { rewriteArticle, type RewriteInput } from "./rewriter.js";
 
-const DEFAULT_DRAFTS_DIR = join(
-  homedir(),
-  "Projects",
-  "astgl-articles",
-  "substack"
-);
+// WHAT: Rewrite drafts are written under the Research drive drafts archive.
+// WHY:  The drafts archive was relocated off the repo (substack retired,
+//       2026-07-13) to /Volumes/Research/ASTGL Articles/Drafts — canonical for
+//       the whole draft pipeline (ingest + reconcile share this default).
+//       Override with ASTGL_DRAFTS_DIR if the path differs.
+const DEFAULT_DRAFTS_DIR = "/Volumes/Research/ASTGL Articles/Drafts";
 
 interface CliFlags {
   dryRun: boolean;
@@ -248,6 +247,25 @@ async function processArticle(
     };
   }
 
+  // WHAT: Resolve the drafts root and refuse early if it is missing.
+  // WHY:  Check BEFORE the expensive two-pass rewrite so an unmounted Research
+  //       volume doesn't burn a full LLM rewrite per candidate before failing;
+  //       and once unmounted, the mkdirSync(recursive) below would create a
+  //       PHANTOM local dir shadowing the mount point. Fail loudly instead.
+  const draftsDir = process.env.ASTGL_DRAFTS_DIR || DEFAULT_DRAFTS_DIR;
+  if (!existsSync(draftsDir)) {
+    const message = `Drafts root not found: ${draftsDir} — external volume may be unmounted; refusing to rewrite/write draft.`;
+    console.error(`  ${message}`);
+    return {
+      url: input.url,
+      title: input.title,
+      job_id: null,
+      draft_path: null,
+      status: "failed",
+      error: message,
+    };
+  }
+
   // Two-pass rewrite
   let output;
   try {
@@ -265,8 +283,7 @@ async function processArticle(
     };
   }
 
-  // Write draft to disk
-  const draftsDir = process.env.ASTGL_DRAFTS_DIR || DEFAULT_DRAFTS_DIR;
+  // Write draft to disk (draftsDir validated above, before the rewrite)
   const today = new Date().toISOString().slice(0, 10);
   const slug = slugify(input.title) || `rewrite-${Date.now()}`;
   const dirName = `${today}-rewrite-${slug}`;

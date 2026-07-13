@@ -1,11 +1,11 @@
 {
   "name": "draft-pipeline",
-  "description": "Nightly indexer for pre-publication drafts (astgl-articles/substack/YYYY-MM-DD-*) and the processed-moments topic ledger. Lets the MCP answer 'have I drafted/written about X?' before regenerating duplicate content. Published Substack articles continue to be picked up by the existing 6h content-pipeline once they hit astgl.ai.",
+  "description": "Nightly indexer for pre-publication drafts (/Volumes/Research/ASTGL Articles/Drafts/YYYY-MM-DD-*) and the processed-moments topic ledger. Lets the MCP answer 'have I drafted/written about X?' before regenerating duplicate content. Published Substack articles continue to be picked up by the existing 6h content-pipeline once they hit astgl.ai.",
   "schedule": "0 0 * * *",
   "scheduleReadable": "Every night at 00:00",
   "preExec": {
     "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/ingest-drafts.ts",
-    "description": "Scan substack/ draft folders + processed-moments.json, embed chunks via Ollama, upsert into knowledge.db with contentType=draft."
+    "description": "Scan the Research drive drafts folders + processed-moments.json, embed chunks via Ollama, upsert into knowledge.db with contentType=draft."
   },
   "payload": {
     "instructions": [
