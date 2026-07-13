@@ -2,11 +2,11 @@
 /**
  * Content Structuring pipeline.
  * Takes discovered content (is_new=1 from discovery.db), fetches full article text,
- * classifies via gemma4:26b, extracts Q&A pairs, generates embeddings and JSON-LD,
+ * classifies via qwen3-coder:30b, extracts Q&A pairs, generates embeddings and JSON-LD,
  * and UPSERTs into knowledge.db.
  *
  * Usage: npm run structure
- * Requires: Ollama running with gemma4:26b and nomic-embed-text models
+ * Requires: Ollama running with qwen3-coder:30b and nomic-embed-text models
  */
 
 import Database from "better-sqlite3";
@@ -23,8 +23,10 @@ import {
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
-const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL || "gemma4:26b";
-// WHY: Keep gemma4:26b (17 GB) and nomic-embed-text resident for the
+// WHY: gemma4:26b was the original classify model but was removed 2026-05-19 (Phase 0 LLM cleanup,
+//      freed ~114 GB). qwen3-coder:30b is already installed for the rewriter — reuse it here.
+const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL || "qwen3-coder:30b";
+// WHY: Keep qwen3-coder:30b (18 GB) and nomic-embed-text resident for the
 //      duration of a structuring run so we pay the cold-load cost once,
 //      not per article. 30 min covers a healthy batch with Ollama's
 //      default keep_alive (5 min) being too tight for our cadence.
