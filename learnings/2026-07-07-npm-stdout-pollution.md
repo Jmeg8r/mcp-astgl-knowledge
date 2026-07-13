@@ -29,8 +29,9 @@ So no `npm run`-based line count is reliable here.
 Verify against the production invocation, which bypasses npm entirely:
 
 ```bash
-npm run build
-out=$(node dist/<name>.js --dry-run 2>/dev/null)
+set -euo pipefail                                # fail the check on ANY step failing
+npm run build                                    # broken build → exit before validating stale dist
+out=$(node dist/<name>.js --dry-run 2>/dev/null) # non-zero script exit trips set -e (caught, not ignored)
 # Assert stdout is EXACTLY ONE JSON value — works for compact OR pretty-printed
 # output (jq -s slurps the whole stream into an array; length must be 1).
 printf '%s' "$out" | jq -es 'length == 1' >/dev/null
