@@ -278,14 +278,16 @@ function listDraftFolders(root: string): string[] {
 async function main() {
   console.error("=== ASTGL Draft + Topic Ledger Ingestion ===\n");
 
-  // WHAT: Skip cleanly if the drafts root is missing (e.g. Research drive unmounted).
-  // WHY:  This indexer is OPTIONAL and additive — unlike the destructive reconciler
-  //       (which refuses loudly with exit 1), a nightly run while the external volume
-  //       is unmounted should be a clean skip, not a logged failure. exit 0 with
-  //       {skipped:true} mirrors sync-wiki.ts.
-  if (!existsSync(DRAFTS_DIR)) {
+  // WHAT: Skip cleanly ONLY when the drafts root is on an unmounted /Volumes mount.
+  // WHY:  This indexer is optional/additive, so a nightly run while the external
+  //       Research volume is unmounted should be a clean skip (exit 0), mirroring
+  //       sync-wiki.ts. But a missing root that is NOT an absent mount — a typo'd
+  //       ASTGL_DRAFTS_DIR or a deleted local dir — is a real error: fail loudly so
+  //       cron never "succeeds" while silently indexing nothing.
+  const volumeMatch = DRAFTS_DIR.match(/^(\/Volumes\/[^/]+)/);
+  if (volumeMatch && !existsSync(volumeMatch[1])) {
     console.error(
-      `Drafts directory not found: ${DRAFTS_DIR} — external volume may be unmounted; skipping.`,
+      `External volume not mounted at ${volumeMatch[1]} — skipping draft ingestion.`,
     );
     console.log(
       JSON.stringify({
@@ -295,6 +297,10 @@ async function main() {
       }),
     );
     return;
+  }
+  if (!existsSync(DRAFTS_DIR)) {
+    console.error(`Drafts directory not found: ${DRAFTS_DIR}`);
+    process.exit(1);
   }
 
   const knowledgeDb = initKnowledgeDb();

@@ -10,7 +10,7 @@
   "payload": {
     "instructions": [
       "Review the JSON output: examined (total drafts in DB), retired[] (each with url, title, reason, chunks_deleted, qa_deleted), backup_path.",
-      "If retired count is unexpectedly high, check whether the substack/ folder layout changed (e.g., a sweep moved many drafts to /published/) — flag it.",
+      "If retired count is unexpectedly high, check whether the Research drive Drafts/ folder layout changed (e.g., pieces were shipped and renamed with a Published_* prefix) — flag it.",
       "If backup_path is set, the pre-run snapshot is on disk; clean up older snapshots manually after a week.",
       "If 'reason' is 'url-malformed' for any retirement, that draft URL did not match the YYYY-MM-DD-slug pattern — investigate the source row before treating it as a clean retirement."
     ]

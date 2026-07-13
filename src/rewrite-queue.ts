@@ -247,6 +247,25 @@ async function processArticle(
     };
   }
 
+  // WHAT: Resolve the drafts root and refuse early if it is missing.
+  // WHY:  Check BEFORE the expensive two-pass rewrite so an unmounted Research
+  //       volume doesn't burn a full LLM rewrite per candidate before failing;
+  //       and once unmounted, the mkdirSync(recursive) below would create a
+  //       PHANTOM local dir shadowing the mount point. Fail loudly instead.
+  const draftsDir = process.env.ASTGL_DRAFTS_DIR || DEFAULT_DRAFTS_DIR;
+  if (!existsSync(draftsDir)) {
+    const message = `Drafts root not found: ${draftsDir} — external volume may be unmounted; refusing to rewrite/write draft.`;
+    console.error(`  ${message}`);
+    return {
+      url: input.url,
+      title: input.title,
+      job_id: null,
+      draft_path: null,
+      status: "failed",
+      error: message,
+    };
+  }
+
   // Two-pass rewrite
   let output;
   try {
@@ -264,24 +283,7 @@ async function processArticle(
     };
   }
 
-  // Write draft to disk
-  const draftsDir = process.env.ASTGL_DRAFTS_DIR || DEFAULT_DRAFTS_DIR;
-  // WHAT: Refuse to write if the drafts root is missing.
-  // WHY:  The archive lives on the external Research drive. If it's unmounted,
-  //       mkdirSync(recursive) below would create a PHANTOM local dir shadowing
-  //       the mount point, and the draft would vanish on remount. Fail loudly.
-  if (!existsSync(draftsDir)) {
-    const message = `Drafts root not found: ${draftsDir} — external volume may be unmounted; refusing to write draft.`;
-    console.error(`  ${message}`);
-    return {
-      url: input.url,
-      title: input.title,
-      job_id: null,
-      draft_path: null,
-      status: "failed",
-      error: message,
-    };
-  }
+  // Write draft to disk (draftsDir validated above, before the rewrite)
   const today = new Date().toISOString().slice(0, 10);
   const slug = slugify(input.title) || `rewrite-${Date.now()}`;
   const dirName = `${today}-rewrite-${slug}`;
