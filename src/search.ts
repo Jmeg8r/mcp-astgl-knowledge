@@ -553,6 +553,12 @@ export interface FindArticlesFilters {
   limit?: number;
 }
 
+// WHAT: Structured metadata lookup over the articles table (tag / type / title / date).
+// WHY:  Tag filtering (here and in listTags) matches against the raw `tags` JSON column
+//       with a LIKE scan and parses every row's JSON in JS — O(n) over all articles.
+//       Fine at the current corpus size; if the article count grows large, normalize
+//       tags into an `article_tags(article_id, tag)` table with an index on `tag` and
+//       query that instead of scanning + parsing every row.
 export function findArticles(filters: FindArticlesFilters): ArticleHit[] {
   const database = getDb();
   const conditions: string[] = [];

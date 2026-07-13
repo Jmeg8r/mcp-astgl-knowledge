@@ -138,10 +138,10 @@ function htmlToMarkdown(html: string): string {
   return content.trim();
 }
 
-// ─── LLM Integration (gemma4:26b) ───────────────────────────────────
+// ─── LLM Integration (CLASSIFY_MODEL, default qwen3-coder:30b) ──────
 
 // WHAT: Extract JSON from LLM response, stripping thinking-mode preamble
-// WHY: gemma4 with thinking enabled sometimes prepends markdown before JSON
+// WHY: some models with thinking enabled sometimes prepend markdown before JSON
 function extractJson(raw: string): string {
   // Try direct parse first
   const trimmed = raw.trim();

@@ -903,12 +903,14 @@ server.tool(
       .describe("Case-insensitive substring match on the article title"),
     date_from: z
       .string()
+      .date()
       .optional()
-      .describe("Earliest publication date, ISO format (e.g. '2026-04-01')"),
+      .describe("Earliest publication date, ISO date YYYY-MM-DD (e.g. '2026-04-01')"),
     date_to: z
       .string()
+      .date()
       .optional()
-      .describe("Latest publication date, ISO format (e.g. '2026-06-30')"),
+      .describe("Latest publication date, ISO date YYYY-MM-DD (e.g. '2026-06-30')"),
     limit: z
       .number()
       .min(1)
