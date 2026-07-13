@@ -158,6 +158,21 @@ async function main() {
   console.error(`Examining ${drafts.length} draft entries\n`);
 
   const siblings = listSiblingFolders(DRAFTS_DIR);
+
+  // WHAT: Refuse to reconcile if the DB has drafts but the mounted root is empty.
+  // WHY:  existsSync(DRAFTS_DIR) passing is not enough — a mounted-but-empty root
+  //       (wrong path, partial mount, or a genuinely emptied dir) makes every draft
+  //       look "missing", so a live run would hard-delete ALL of them. Aborting is
+  //       the safe default; a real full clear-out should be handled deliberately.
+  if (drafts.length > 0 && siblings.length === 0) {
+    console.error(
+      `Drafts root ${DRAFTS_DIR} contains no folders, but the DB has ${drafts.length} draft(s).\n` +
+        `Refusing to reconcile — this would retire every draft. No rows deleted.\n` +
+        `If the archive was genuinely emptied, handle it deliberately rather than via this sweep.`
+    );
+    process.exit(1);
+  }
+
   const candidates: RetirementCandidate[] = [];
 
   for (const draft of drafts) {

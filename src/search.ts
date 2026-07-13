@@ -562,21 +562,28 @@ export function findArticles(filters: FindArticlesFilters): ArticleHit[] {
     conditions.push("content_type = ?");
     params.push(filters.content_type);
   }
+  // WHY: escape LIKE metacharacters so a literal % or _ in the user's value
+  //      (e.g. a title containing "50%") matches literally, not as a wildcard.
+  const escapeLike = (value: string): string => value.replace(/[%_]/g, (ch) => `\\${ch}`);
+
   if (filters.title) {
-    conditions.push("LOWER(title) LIKE ?");
-    params.push(`%${filters.title.toLowerCase()}%`);
+    conditions.push("LOWER(title) LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(filters.title.toLowerCase())}%`);
   }
   if (filters.tag) {
     // tags is a JSON array string; match case-insensitively on the tag token.
-    conditions.push("LOWER(COALESCE(tags, '[]')) LIKE ?");
-    params.push(`%"${filters.tag.toLowerCase()}"%`);
+    conditions.push("LOWER(COALESCE(tags, '[]')) LIKE ? ESCAPE '\\'");
+    params.push(`%"${escapeLike(filters.tag.toLowerCase())}"%`);
   }
+  // WHY: compare on date() both sides so a full ISO timestamp in processed_at
+  //      still falls within a date-only boundary (date_to '2026-06-30' must
+  //      include a draft processed at '2026-06-30T14:00:00Z').
   if (filters.date_from) {
-    conditions.push("COALESCE(pub_date, processed_at) >= ?");
+    conditions.push("date(COALESCE(pub_date, processed_at)) >= date(?)");
     params.push(filters.date_from);
   }
   if (filters.date_to) {
-    conditions.push("COALESCE(pub_date, processed_at) <= ?");
+    conditions.push("date(COALESCE(pub_date, processed_at)) <= date(?)");
     params.push(filters.date_to);
   }
 

@@ -880,9 +880,23 @@ server.tool(
       .optional()
       .describe("Filter to articles carrying this tag (case-insensitive, e.g. 'MCP', 'Python')"),
     content_type: z
-      .string()
+      .enum([
+        "article",
+        "tutorial",
+        "faq",
+        "comparison",
+        "guide",
+        "newsletter",
+        "project",
+        "draft",
+        "concept",
+        "entity",
+        "synthesis",
+      ])
       .optional()
-      .describe("Filter by content type: article, tutorial, draft, comparison, guide, newsletter, project"),
+      .describe(
+        "Filter by content type. Article kinds: article, tutorial, faq, comparison, guide, newsletter, project, draft. Wiki kinds (from SecondBrain): concept, entity, synthesis."
+      ),
     title: z
       .string()
       .optional()

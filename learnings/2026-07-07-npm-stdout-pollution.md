@@ -6,9 +6,12 @@ and suggested counting `npm run` stdout lines instead.
 
 ## The problem
 
-Scripts in this repo have a hard contract: exactly ONE JSON line on stdout (schedulers
-and MAESTER parse it). The suggested check — count lines from `npm run <name>` — looked
-right but would false-fail on this machine.
+Scripts in this repo have a hard contract: exactly ONE JSON *value* on stdout (schedulers
+and MAESTER parse it with `JSON.parse`). Note that most scripts emit it pretty-printed via
+`JSON.stringify(summary, null, 2)`, so it spans multiple physical lines — the contract is
+"one JSON value", NOT "one line". The suggested check — count lines from `npm run <name>` —
+looked right but would false-fail on this machine on two counts: npm banner noise AND the
+pretty-printed multi-line summary.
 
 ## What testing revealed
 
@@ -28,7 +31,9 @@ Verify against the production invocation, which bypasses npm entirely:
 ```bash
 npm run build
 out=$(node dist/<name>.js --dry-run 2>/dev/null)
-[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && printf '%s' "$out" | jq -e . >/dev/null
+# Assert stdout is EXACTLY ONE JSON value — works for compact OR pretty-printed
+# output (jq -s slurps the whole stream into an array; length must be 1).
+printf '%s' "$out" | jq -es 'length == 1' >/dev/null
 ```
 
 Bonus: this is literally what launchd runs, so the check also catches stale-dist drift.

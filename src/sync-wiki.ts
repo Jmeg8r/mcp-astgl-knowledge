@@ -280,8 +280,15 @@ async function main() {
   if (FLAGS.full) console.error("  [FULL SYNC — ignoring incremental state]\n");
 
   // Mount guard
-  if (!existsSync("/Volumes/Research")) {
-    console.error("Research volume not mounted at /Volumes/Research — skipping wiki sync.");
+  // WHAT: Derive the external-volume mount point from WIKI_ROOT rather than
+  //       hardcoding /Volumes/Research.
+  // WHY:  A custom WIKI_ROOT not under /Volumes would otherwise be gated on an
+  //       unrelated path; and if WIKI_ROOT points at a different volume, we must
+  //       check THAT volume. Only /Volumes/* roots need the skip-when-unmounted
+  //       guard; a local root falls through to the existsSync check below.
+  const volumeMatch = WIKI_ROOT.match(/^(\/Volumes\/[^/]+)/);
+  if (volumeMatch && !existsSync(volumeMatch[1])) {
+    console.error(`External volume not mounted at ${volumeMatch[1]} — skipping wiki sync.`);
     console.log(JSON.stringify({ skipped: true, reason: "volume_unmounted" }));
     process.exit(0);
   }
@@ -300,6 +307,7 @@ async function main() {
   let skippedParseError = 0;
   let chunksTotal = 0;
   let orphansRetired = 0;
+  let failed = 0;
 
   const seenUrls = new Set<string>();
 
@@ -355,6 +363,11 @@ async function main() {
         (t) => t.toLowerCase() === "astgl"
       );
       if (!hasAstgl) {
+        // WHY: a page that still exists but lost its `astgl` tag must become
+        //      eligible for orphan retirement. seenUrls.add(url) ran above, so
+        //      drop it here — otherwise the orphan sweep never flags it and the
+        //      stale page stays indexed forever (contradicting cron/wiki-sync.json).
+        seenUrls.delete(url);
         skippedNoTag++;
         continue;
       }
@@ -386,54 +399,85 @@ async function main() {
         continue;
       }
 
-      // Embed
-      const BATCH_SIZE = 20;
-      const allEmbeddings: number[][] = [];
-      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-        const batch = chunks.slice(i, i + BATCH_SIZE);
-        const embeddings = await embed(batch.map((c) => c.content));
-        allEmbeddings.push(...embeddings);
+      // WHY: isolate per-file failure. A single embedding/index error must not
+      //      abort the whole nightly run and discard all prior in-run progress —
+      //      count it, skip the file, and let saveSyncState persist the rest.
+      try {
+        // Embed
+        const BATCH_SIZE = 20;
+        const allEmbeddings: number[][] = [];
+        for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+          const batch = chunks.slice(i, i + BATCH_SIZE);
+          const embeddings = await embed(batch.map((c) => c.content));
+          allEmbeddings.push(...embeddings);
+        }
+
+        // Build article
+        const topics: string[] = [];
+        if (parsed.fm.entityType) topics.push(parsed.fm.entityType);
+        topics.push(...parsed.fm.aliases);
+        topics.push(
+          ...parsed.fm.related.filter((r) => r.length > 0)
+        );
+
+        const article: StructuredArticle = {
+          url,
+          sourceUrl: `file://${filePath}`,
+          slug,
+          title,
+          description,
+          author: "James Cruce",
+          contentType: type,
+          topics,
+          qaPairs: [],
+          jsonLd: "",
+          markdownBody: cleanWikiContent(parsed.body),
+          processedAt: new Date().toISOString(),
+          tags: parsed.fm.tags,
+          sourceOrigin: "secondbrain",
+        };
+
+        upsertArticle(knowledgeDb!, article);
+        replaceChunksForArticle(knowledgeDb!, url, chunks, allEmbeddings);
+
+        // Update sync state
+        const stat = statSync(filePath);
+        syncState.syncedFiles[url] = {
+          mtime: stat.mtime.toISOString(),
+          sourceFile,
+        };
+
+        synced++;
+        chunksTotal += chunks.length;
+        console.error(`    Synced: ${sourceFile} → ${chunks.length} chunks`);
+      } catch (err) {
+        // WHY: keep url in seenUrls so a transient embed failure never triggers
+        //      orphan retirement of an otherwise-valid page.
+        failed++;
+        console.error(
+          `    ERROR indexing ${sourceFile}: ${err instanceof Error ? err.message : err}`
+        );
       }
-
-      // Build article
-      const topics: string[] = [];
-      if (parsed.fm.entityType) topics.push(parsed.fm.entityType);
-      topics.push(...parsed.fm.aliases);
-      topics.push(
-        ...parsed.fm.related.filter((r) => r.length > 0)
-      );
-
-      const article: StructuredArticle = {
-        url,
-        sourceUrl: `file://${filePath}`,
-        slug,
-        title,
-        description,
-        author: "James Cruce",
-        contentType: type,
-        topics,
-        qaPairs: [],
-        jsonLd: "",
-        markdownBody: cleanWikiContent(parsed.body),
-        processedAt: new Date().toISOString(),
-        tags: parsed.fm.tags,
-        sourceOrigin: "secondbrain",
-      };
-
-      upsertArticle(knowledgeDb!, article);
-      replaceChunksForArticle(knowledgeDb!, url, chunks, allEmbeddings);
-
-      // Update sync state
-      const stat = statSync(filePath);
-      syncState.syncedFiles[url] = {
-        mtime: stat.mtime.toISOString(),
-        sourceFile,
-      };
-
-      synced++;
-      chunksTotal += chunks.length;
-      console.error(`    Synced: ${sourceFile} → ${chunks.length} chunks`);
     }
+  }
+
+  // WHY: if every changed file failed to index (e.g. Ollama down) fail loudly and
+  //      mutate nothing — don't report a clean zero or retire orphans while the
+  //      embedder is unavailable (generalizes the citation-test rule, PR #15).
+  if (!FLAGS.dryRun && failed > 0 && synced === 0) {
+    console.error(`\nAll ${failed} changed file(s) failed to index — aborting without changes.`);
+    closeKnowledgeDb();
+    console.log(
+      JSON.stringify({
+        pages_synced: 0,
+        pages_failed: failed,
+        pages_skipped_unchanged: skippedUnchanged,
+        error: "all_failed",
+        dry_run: FLAGS.dryRun,
+        full_sync: FLAGS.full,
+      })
+    );
+    process.exit(1);
   }
 
   // Orphan detection: find synced URLs whose source files no longer exist
@@ -471,6 +515,7 @@ async function main() {
 
   const summary = {
     pages_synced: synced,
+    pages_failed: failed,
     pages_skipped_unchanged: skippedUnchanged,
     pages_skipped_no_astgl_tag: skippedNoTag,
     pages_skipped_parse_error: skippedParseError,
@@ -480,7 +525,7 @@ async function main() {
     full_sync: FLAGS.full,
   };
 
-  console.error(`\n=== Done: ${synced} synced, ${skippedUnchanged} unchanged, ${orphansRetired} orphans retired, ${chunksTotal} chunks ===`);
+  console.error(`\n=== Done: ${synced} synced, ${failed} failed, ${skippedUnchanged} unchanged, ${orphansRetired} orphans retired, ${chunksTotal} chunks ===`);
   console.log(JSON.stringify(summary));
 }
 

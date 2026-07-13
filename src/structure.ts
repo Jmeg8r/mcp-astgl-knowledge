@@ -521,7 +521,7 @@ async function main() {
       }
 
       // 2. Classify content
-      console.error("    Classifying via gemma4:26b...");
+      console.error(`    Classifying via ${CLASSIFY_MODEL}...`);
       const classification = await step("classify", () => classifyContent(markdown));
       console.error(
         `    Type: ${classification.content_type} | Title: ${classification.title}`
