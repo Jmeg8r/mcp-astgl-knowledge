@@ -528,6 +528,136 @@ export function getLatest(limit: number = 5): LatestArticle[] {
   }));
 }
 
+// --- find_articles (structured, non-vector) ---
+// WHAT: Filter the article index by tag, content type, date range, and/or title
+//       substring — a metadata query, not a semantic one.
+// WHY:  Lets an agent answer "what have I written tagged 'MCP' since April?" or
+//       "list my drafts about Swift" without embeddings, so it works even when
+//       Ollama is down. Complements the semantic searchArticles().
+export interface ArticleHit {
+  title: string;
+  description: string;
+  url: string;
+  slug: string;
+  content_type: string;
+  pub_date: string | null;
+  tags: string[];
+}
+
+export interface FindArticlesFilters {
+  tag?: string;
+  content_type?: string;
+  title?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+}
+
+// WHAT: Structured metadata lookup over the articles table (tag / type / title / date).
+// WHY:  Tag filtering (here and in listTags) matches against the raw `tags` JSON column
+//       with a LIKE scan and parses every row's JSON in JS — O(n) over all articles.
+//       Fine at the current corpus size; if the article count grows large, normalize
+//       tags into an `article_tags(article_id, tag)` table with an index on `tag` and
+//       query that instead of scanning + parsing every row.
+export function findArticles(filters: FindArticlesFilters): ArticleHit[] {
+  const database = getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.content_type) {
+    conditions.push("content_type = ?");
+    params.push(filters.content_type);
+  }
+  // WHY: escape LIKE metacharacters so a literal % or _ in the user's value
+  //      (e.g. a title containing "50%") matches literally, not as a wildcard.
+  const escapeLike = (value: string): string => value.replace(/[%_]/g, (ch) => `\\${ch}`);
+
+  if (filters.title) {
+    conditions.push("LOWER(title) LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(filters.title.toLowerCase())}%`);
+  }
+  if (filters.tag) {
+    // tags is a JSON array string; match case-insensitively on the tag token.
+    conditions.push("LOWER(COALESCE(tags, '[]')) LIKE ? ESCAPE '\\'");
+    params.push(`%"${escapeLike(filters.tag.toLowerCase())}"%`);
+  }
+  // WHY: compare on date() both sides so a full ISO timestamp in processed_at
+  //      still falls within a date-only boundary (date_to '2026-06-30' must
+  //      include a draft processed at '2026-06-30T14:00:00Z').
+  if (filters.date_from) {
+    conditions.push("date(COALESCE(pub_date, processed_at)) >= date(?)");
+    params.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    conditions.push("date(COALESCE(pub_date, processed_at)) <= date(?)");
+    params.push(filters.date_to);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = Math.min(Math.max(filters.limit ?? 25, 1), 200);
+  params.push(limit);
+
+  const rows = database
+    .prepare(
+      `SELECT title, description, url, slug,
+              COALESCE(content_type, 'article') AS content_type,
+              pub_date,
+              COALESCE(tags, '[]') AS tags
+       FROM articles
+       ${where}
+       ORDER BY COALESCE(pub_date, processed_at, '') DESC, rowid DESC
+       LIMIT ?`
+    )
+    .all(...params) as Array<{
+    title: string;
+    description: string;
+    url: string;
+    slug: string;
+    content_type: string;
+    pub_date: string | null;
+    tags: string;
+  }>;
+
+  return rows.map((r) => {
+    let tags: string[] = [];
+    try {
+      const parsed = JSON.parse(r.tags);
+      if (Array.isArray(parsed)) tags = parsed.map((t) => String(t));
+    } catch {
+      tags = [];
+    }
+    return { ...r, tags };
+  });
+}
+
+// WHAT: List every distinct tag with how many articles carry it.
+// WHY: Gives an agent (or the user) the vocabulary to filter by.
+export function listTags(): Array<{ tag: string; count: number }> {
+  const database = getDb();
+  const rows = database
+    .prepare("SELECT COALESCE(tags, '[]') AS tags FROM articles")
+    .all() as Array<{ tags: string }>;
+
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    try {
+      const parsed = JSON.parse(r.tags);
+      if (Array.isArray(parsed)) {
+        for (const t of parsed) {
+          const tag = String(t).trim();
+          if (tag) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+        }
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+
 // --- list_topics ---
 // WHAT: List all topics with their content types and section headings
 // WHY: Gives AI assistants an overview of available coverage

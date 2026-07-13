@@ -9,7 +9,15 @@ data/query-log.db
 data/citation-test.db
 data/alerts.db
 data/discovery.db
+# WAL sidecars for any gitignored WAL-mode db (query-log, etc.)
+data/*.db-wal
+data/*.db-shm
+# Runtime state for the wiki-sync pipeline — regenerated every run
+data/wiki-sync-state.json
 logs/
-data/*.bak.*
+# Timestamped db backups: catches both `.bak.<reason>` and `.bak-<reason>` forms
+data/*.bak*
 .claude/worktrees/
 .claude/settings.local.json
+# Local editor/tool config (aikido rules are tool-generated)
+.cursor/

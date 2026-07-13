@@ -21,6 +21,8 @@ import {
   getTutorial,
   compareTopics,
   getLatest,
+  findArticles,
+  listTags,
 } from "./search.js";
 import { initQueryLog, logQuery, closeQueryLog } from "./query-log.js";
 import {
@@ -862,6 +864,144 @@ server.tool(
     return {
       content: [
         { type: "text" as const, text: withRateInfo(formatted, rl.rateLimit) },
+      ],
+    };
+  }
+);
+
+// --- find_articles ---
+
+server.tool(
+  "find_articles",
+  "Find ASTGL articles by metadata — tag, content type (article, tutorial, draft, comparison, guide, newsletter, project), title text, and/or publication date range. This is a structured lookup over the article index (no semantic embedding), so use it for questions like 'list my drafts tagged Swift' or 'what did I write between April and June'. For meaning-based search use search_articles instead.",
+  {
+    tag: z
+      .string()
+      .optional()
+      .describe("Filter to articles carrying this tag (case-insensitive, e.g. 'MCP', 'Python')"),
+    content_type: z
+      .enum([
+        "article",
+        "tutorial",
+        "faq",
+        "comparison",
+        "guide",
+        "newsletter",
+        "project",
+        "draft",
+        "concept",
+        "entity",
+        "synthesis",
+      ])
+      .optional()
+      .describe(
+        "Filter by content type. Article kinds: article, tutorial, faq, comparison, guide, newsletter, project, draft. Wiki kinds (from SecondBrain): concept, entity, synthesis."
+      ),
+    title: z
+      .string()
+      .optional()
+      .describe("Case-insensitive substring match on the article title"),
+    date_from: z
+      .string()
+      .date()
+      .optional()
+      .describe("Earliest publication date, ISO date YYYY-MM-DD (e.g. '2026-04-01')"),
+    date_to: z
+      .string()
+      .date()
+      .optional()
+      .describe("Latest publication date, ISO date YYYY-MM-DD (e.g. '2026-06-30')"),
+    limit: z
+      .number()
+      .min(1)
+      .max(200)
+      .default(25)
+      .describe("Maximum number of results to return (default: 25)"),
+  },
+  async ({ tag, content_type, title, date_from, date_to, limit }) => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const results = findArticles({ tag, content_type, title, date_from, date_to, limit });
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "find_articles",
+      queryParams: JSON.stringify({ tag, content_type, title, date_from, date_to, limit }),
+      contentCited: JSON.stringify(results.map((r) => r.url)),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    if (results.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: withRateInfo("No articles matched those filters.", rl.rateLimit),
+          },
+        ],
+      };
+    }
+
+    const formatted = results
+      .map((r, i) => {
+        const tagStr = r.tags.length > 0 ? ` _[${r.tags.join(", ")}]_` : "";
+        const date = r.pub_date ? r.pub_date.slice(0, 10) : "undated";
+        return `### ${i + 1}. ${r.title}\n**Type:** ${r.content_type} · **Date:** ${date} · **Source:** ${r.url}${tagStr}\n\n${r.description}`;
+      })
+      .join("\n\n---\n\n");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: withRateInfo(`Found ${results.length} article(s):\n\n${formatted}`, rl.rateLimit),
+        },
+      ],
+    };
+  }
+);
+
+// --- list_tags ---
+
+server.tool(
+  "list_tags",
+  "List every tag in the ASTGL article index with how many articles carry it. Useful for discovering the available tag vocabulary before calling find_articles.",
+  {},
+  async () => {
+    const rl = enforceRateLimit();
+    if (rl.blocked) return rl.response;
+
+    const start = performance.now();
+    const tags = listTags();
+    const elapsed = Math.round(performance.now() - start);
+
+    logQuery({
+      timestamp: new Date().toISOString(),
+      clientId,
+      toolName: "list_tags",
+      queryParams: JSON.stringify({}),
+      contentCited: JSON.stringify([]),
+      responseTimeMs: elapsed,
+      confidenceScore: null,
+    });
+
+    if (tags.length === 0) {
+      return {
+        content: [
+          { type: "text" as const, text: withRateInfo("No tags indexed yet.", rl.rateLimit) },
+        ],
+      };
+    }
+
+    const formatted = tags.map((t) => `- ${t.tag} (${t.count})`).join("\n");
+    return {
+      content: [
+        { type: "text" as const, text: withRateInfo(`${tags.length} tags:\n\n${formatted}`, rl.rateLimit) },
       ],
     };
   }

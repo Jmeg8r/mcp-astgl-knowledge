@@ -32,7 +32,7 @@ import { initKnowledgeDb, deleteArticle, closeKnowledgeDb } from "./knowledge-db
 
 const DRAFTS_DIR =
   process.env.ASTGL_DRAFTS_DIR ||
-  join(process.env.HOME || "~", "Projects", "astgl-articles", "substack");
+  "/Volumes/Research/ASTGL Articles/Drafts";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 const DRAFT_URL_PREFIX = "local://astgl-articles/draft/";
@@ -131,6 +131,21 @@ async function main() {
     process.exit(1);
   }
 
+  // WHAT: Refuse to reconcile if the drafts root is missing entirely.
+  // WHY: The archive lives on an external volume (/Volumes/Research). If that
+  //      drive is unmounted when this runs, every folder would look "missing"
+  //      and ALL drafts would be hard-deleted. Aborting is the safe default —
+  //      a genuinely empty/removed root should be handled deliberately, not by
+  //      a 2am cron firing against an unmounted disk.
+  if (!existsSync(DRAFTS_DIR)) {
+    console.error(
+      `Drafts root not found: ${DRAFTS_DIR}\n` +
+        `Refusing to reconcile — the volume may be unmounted. No rows deleted.\n` +
+        `If the drafts directory has genuinely moved, set ASTGL_DRAFTS_DIR or update the default.`
+    );
+    process.exit(1);
+  }
+
   const db = initKnowledgeDb();
 
   const drafts = db
@@ -143,6 +158,21 @@ async function main() {
   console.error(`Examining ${drafts.length} draft entries\n`);
 
   const siblings = listSiblingFolders(DRAFTS_DIR);
+
+  // WHAT: Refuse to reconcile if the DB has drafts but the mounted root is empty.
+  // WHY:  existsSync(DRAFTS_DIR) passing is not enough — a mounted-but-empty root
+  //       (wrong path, partial mount, or a genuinely emptied dir) makes every draft
+  //       look "missing", so a live run would hard-delete ALL of them. Aborting is
+  //       the safe default; a real full clear-out should be handled deliberately.
+  if (drafts.length > 0 && siblings.length === 0) {
+    console.error(
+      `Drafts root ${DRAFTS_DIR} contains no folders, but the DB has ${drafts.length} draft(s).\n` +
+        `Refusing to reconcile — this would retire every draft. No rows deleted.\n` +
+        `If the archive was genuinely emptied, handle it deliberately rather than via this sweep.`
+    );
+    process.exit(1);
+  }
+
   const candidates: RetirementCandidate[] = [];
 
   for (const draft of drafts) {

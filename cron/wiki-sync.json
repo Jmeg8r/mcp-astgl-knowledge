@@ -1,0 +1,17 @@
+{
+  "name": "wiki-sync",
+  "description": "Nightly sync of ASTGL-tagged SecondBrain wiki pages (concepts, entities, syntheses) into knowledge.db. Incremental — only re-processes pages modified since last sync. Detects and retires orphaned pages whose source files were deleted or lost the astgl tag.",
+  "schedule": "30 0 * * *",
+  "scheduleReadable": "Every night at 00:30 (30min after draft pipeline)",
+  "preExec": {
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/sync-wiki.ts",
+    "description": "Walk SecondBrain wiki dirs, filter for astgl tags, embed chunks via Ollama, upsert into knowledge.db with source_origin=secondbrain."
+  },
+  "payload": {
+    "instructions": [
+      "Review the JSON output: pages_synced, pages_skipped_unchanged, orphans_retired, chunks_created.",
+      "If orphans_retired > 0, verify the pages were intentionally deleted or re-tagged in SecondBrain.",
+      "If the Research volume was unmounted, the script exits cleanly with skipped=true — this is expected."
+    ]
+  }
+}
