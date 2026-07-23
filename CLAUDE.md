@@ -60,7 +60,7 @@ Search is 100% vector KNN — there is no FTS table.
 - **Telegram bot** (rewrite approvals — shared with claudeclaw), **Discord webhooks**
   (reports/alerts), **Smithery registry** (competitor scan), **npm registry + GitHub
   releases** (freshness, unauthenticated).
-- **`/Volumes/Research`** external drive: drafts at `ASTGL Articles/Drafts`, wiki at
+- **`/Volumes/Research`** external drive: drafts at `Publishing/ASTGL/Articles/Drafts`, wiki at
   `Brain/SecondBrain/wiki`. May be unmounted — see Mistake #5.
 - **Sibling repos referenced by path**: `~/Projects/astgl-site` (ingest source +
   related-links injection), `~/Projects/astgl-articles/substack` (rewrite drafts out),

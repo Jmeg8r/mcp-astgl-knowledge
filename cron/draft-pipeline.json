@@ -1,6 +1,6 @@
 {
   "name": "draft-pipeline",
-  "description": "Nightly indexer for pre-publication drafts (/Volumes/Research/ASTGL Articles/Drafts/YYYY-MM-DD-*) and the processed-moments topic ledger. Lets the MCP answer 'have I drafted/written about X?' before regenerating duplicate content. Published Substack articles continue to be picked up by the existing 6h content-pipeline once they hit astgl.ai.",
+  "description": "Nightly indexer for pre-publication drafts (/Volumes/Research/Publishing/ASTGL/Articles/Drafts/YYYY-MM-DD-*) and the processed-moments topic ledger. Lets the MCP answer 'have I drafted/written about X?' before regenerating duplicate content. Published Substack articles continue to be picked up by the existing 6h content-pipeline once they hit astgl.ai.",
   "schedule": "0 0 * * *",
   "scheduleReadable": "Every night at 00:00",
   "preExec": {
