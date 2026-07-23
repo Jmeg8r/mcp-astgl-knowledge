@@ -22,7 +22,7 @@
  *   npm run reconcile-drafts -- --dry-run   # show what would be retired
  *   npm run reconcile-drafts -- --no-backup # skip the pre-run DB backup
  *
- * Env: ASTGL_DRAFTS_DIR — drafts root (default: /Volumes/Research/ASTGL Articles/Drafts)
+ * Env: ASTGL_DRAFTS_DIR — drafts root (default: /Volumes/Research/Publishing/ASTGL/Articles/Drafts)
  */
 
 import { existsSync, readdirSync, copyFileSync } from "fs";
@@ -32,7 +32,7 @@ import { initKnowledgeDb, deleteArticle, closeKnowledgeDb } from "./knowledge-db
 
 const DRAFTS_DIR =
   process.env.ASTGL_DRAFTS_DIR ||
-  "/Volumes/Research/ASTGL Articles/Drafts";
+  "/Volumes/Research/Publishing/ASTGL/Articles/Drafts";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 const DRAFT_URL_PREFIX = "local://astgl-articles/draft/";

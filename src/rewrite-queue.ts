@@ -19,7 +19,7 @@
  *   ANTHROPIC_API_KEY            (required for live runs)
  *   OLLAMA_BASE_URL              (default http://localhost:11434)
  *   OLLAMA_REWRITE_MODEL         (default qwen3:32b-fast)
- *   ASTGL_DRAFTS_DIR             (default /Volumes/Research/ASTGL Articles/Drafts)
+ *   ASTGL_DRAFTS_DIR             (default /Volumes/Research/Publishing/ASTGL/Articles/Drafts)
  *   TELEGRAM_BOT_TOKEN           (required to send approval pings; skipped if absent)
  *   TELEGRAM_CHAT_ID             (single chat id for the approval ping)
  *   TELEGRAM_THREAD_ID           (optional forum-topic thread id)
@@ -44,10 +44,10 @@ import { rewriteArticle, type RewriteInput } from "./rewriter.js";
 
 // WHAT: Rewrite drafts are written under the Research drive drafts archive.
 // WHY:  The drafts archive was relocated off the repo (substack retired,
-//       2026-07-13) to /Volumes/Research/ASTGL Articles/Drafts — canonical for
+//       2026-07-13) to /Volumes/Research/Publishing/ASTGL/Articles/Drafts — canonical for
 //       the whole draft pipeline (ingest + reconcile share this default).
 //       Override with ASTGL_DRAFTS_DIR if the path differs.
-const DEFAULT_DRAFTS_DIR = "/Volumes/Research/ASTGL Articles/Drafts";
+const DEFAULT_DRAFTS_DIR = "/Volumes/Research/Publishing/ASTGL/Articles/Drafts";
 
 interface CliFlags {
   dryRun: boolean;
