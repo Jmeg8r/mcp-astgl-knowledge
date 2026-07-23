@@ -12,7 +12,7 @@
  * Usage:
  *   npm run ingest-drafts
  *
- * Env: ASTGL_DRAFTS_DIR  — drafts root (default: /Volumes/Research/ASTGL Articles/Drafts)
+ * Env: ASTGL_DRAFTS_DIR  — drafts root (default: /Volumes/Research/Publishing/ASTGL/Articles/Drafts)
  *      OLLAMA_URL        — Ollama endpoint (default: http://localhost:11434)
  *      EMBED_MODEL       — embedding model (default: nomic-embed-text)
  */
@@ -34,7 +34,7 @@ const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
 //      unpublished drafts. Override with ASTGL_DRAFTS_DIR if the path differs.
 const DRAFTS_DIR =
   process.env.ASTGL_DRAFTS_DIR ||
-  "/Volumes/Research/ASTGL Articles/Drafts";
+  "/Volumes/Research/Publishing/ASTGL/Articles/Drafts";
 
 const DATE_SLUG_RE = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 
