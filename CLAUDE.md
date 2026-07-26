@@ -43,8 +43,12 @@ Search is 100% vector KNN — there is no FTS table.
   descriptor/runbook files consumed by MAESTER. Editing them changes nothing about
   when code runs.
 - Three legacy jobs (daily-report 08:00, content-alerts 09:00, content-freshness
-  10:00) were "retired to Maester" but **their plists are still loaded and running**
-  from `~/Library/LaunchAgents/` even though removed from this repo.
+  10:00) were retired to Maester (Telegram via claudeclaw). Their still-installed
+  plists kept firing `--discord` until 2026-07-26, when they were booted out and
+  archived in `~/Library/LaunchAgents.retired/`. The gotcha that made this urgent:
+  both channels share `alerts.db` cooldowns, so whichever scheduler fires first
+  claims the alerts — the Discord jobs (:00 sharp) were suppressing Maester's
+  Telegram alerts (:00 + ~40s) every day.
 - launchd jobs execute **`dist/*.js` with node, not `src/*.ts`** — see Mistake #1.
 - launchd's default PATH lacks nvm/homebrew. Every plist pins
   `/Users/jamescruce/.nvm/versions/node/v24.14.0/bin` first. Omitting this causes
@@ -161,9 +165,9 @@ one-JSON-line stdout contract that launchd logs and MAESTER parse.
 → **Rule: stderr for anything human-readable. stdout is protocol (server) or the
 single final JSON summary (scripts). Nothing else, ever.**
 
-**7. The Trusting Reader.** You quote README.md ("7 tools", env table), `server.json`
-(v1.1.0), or the retired-jobs note as current. All are stale: the server registers 17
-handlers, package.json is v1.2.0, the "retired" plists still run.
+**7. The Trusting Reader.** You quote README.md ("7 tools", env table) or `server.json`
+(v1.1.0) as current. Both are stale: the server registers 17 handlers and package.json
+is v1.2.0.
 → **Rule: for any factual claim about this system, the code and `launchctl list` are
 the source of truth. If you catch a doc being stale, flag it — don't silently trust or
 silently fix without noting it.**
@@ -262,8 +266,9 @@ entry), single `--limit 1` live pipeline runs that don't message humans.
 - Any run that will post to Telegram, Discord, or Substack, or send email.
 - `npm publish`, version bumps intended for release, or changes to the public rate
   limits / registration flow.
-- Deleting or rotating secrets; touching `~/Library/LaunchAgents` for the retired
-  jobs; pruning `data/*.bak.*` files.
+- Deleting or rotating secrets; touching the archived retired-job plists in
+  `~/Library/LaunchAgents.retired/` (they still embed the Discord webhook URL);
+  pruning `data/*.bak.*` files.
 - Any operation on the sibling repos (`astgl-site`, `astgl-articles`,
   `macstudio-openclaw-localllm`) beyond reading them.
 - You found evidence that contradicts this manual or the task's premise (e.g. a
@@ -279,8 +284,8 @@ from the actual data before designing anything — this is the standing lesson i
 - README.md: tool list (7 vs 17 registered), env-var table, jobs table all stale.
 - `server.json` says v1.1.0; package.json is v1.2.0 (registry manifest drift).
 - PRs #10, #13, #14 show OPEN on GitHub but their commits are already in main.
-- Retired plists (daily-report, content-alerts, content-freshness) still loaded in
-  launchd alongside their Maester replacements.
+- ~~Retired plists still loaded alongside their Maester replacements~~ — resolved
+  2026-07-26: booted out and archived in `~/Library/LaunchAgents.retired/`.
 - `ASTGL_DRAFTS_DIR` defaults diverge: ingest/reconcile → `/Volumes/Research/ASTGL
   Articles/Drafts`; rewrite-queue/.env.example → `~/Projects/astgl-articles/substack`.
   Set the env var explicitly; never rely on the default.
