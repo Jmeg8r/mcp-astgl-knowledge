@@ -4,8 +4,8 @@
   "schedule": "0 10 * * *",
   "scheduleReadable": "Every day at 10:00 AM (after content-gap-alerts at 9 AM)",
   "preExec": {
-    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/freshness.ts --discord",
-    "description": "Run freshness checks and send triggered alerts to Discord"
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && node dist/freshness.js",
+    "description": "Run freshness checks. Runs dist (not tsx) and omits --discord: the Discord LaunchAgent was retired 2026-07-26; MAESTER parses this JSON and delivers an actionable Telegram message."
   },
   "payload": {
     "instructions": [

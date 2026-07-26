@@ -4,8 +4,8 @@
   "schedule": "0 9 * * *",
   "scheduleReadable": "Every day at 9:00 AM (after daily report)",
   "preExec": {
-    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/alerts.ts --discord",
-    "description": "Run all alert checks and send triggered alerts to Discord"
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && node dist/alerts.js",
+    "description": "Run all alert checks. Runs dist (not tsx) and omits --discord: the Discord LaunchAgent was retired 2026-07-26; MAESTER parses this JSON and delivers a batched Telegram message."
   },
   "payload": {
     "instructions": [
