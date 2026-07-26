@@ -1,11 +1,11 @@
 {
   "name": "daily-aeo-report",
-  "description": "Generate and deliver daily AEO analytics report to Discord",
+  "description": "Generate and deliver daily AEO analytics report to Telegram (via claudeclaw MAESTER task astgl-daily-report)",
   "schedule": "0 8 * * *",
   "scheduleReadable": "Every day at 8:00 AM",
   "preExec": {
-    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && tsx src/daily-report.ts --discord",
-    "description": "Build AEO report from query logs, knowledge base stats, and discovery pipeline, then send to Discord"
+    "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && node dist/daily-report.js",
+    "description": "Build AEO report from query logs, knowledge base stats, and discovery pipeline. Runs dist (not tsx) and omits --discord: the Discord LaunchAgent was retired 2026-07-26; MAESTER parses this JSON and delivers to Telegram."
   },
   "payload": {
     "instructions": [
