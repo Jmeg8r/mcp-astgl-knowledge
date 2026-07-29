@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { Chunk, QaPair, StructuredArticle, Idea, IdeaFilters } from "./types.js";
 import { EMBEDDING_DIM } from "./types.js";
+import { PUBLISHED_SITE_TYPES } from "./public-allowlist.js";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 
@@ -49,11 +50,41 @@ function runMigrations(database: InstanceType<typeof Database>): void {
     // WHY: Lets find_articles filter by tag without re-deriving from chunk text.
     "ALTER TABLE articles ADD COLUMN tags TEXT DEFAULT '[]'",
     "ALTER TABLE articles ADD COLUMN source_origin TEXT DEFAULT 'astgl-site'",
+    // WHAT: Publication gate flag. 0 = withheld from the npm artifact, 1 = ships.
+    // WHY:  data/knowledge.db ships inside the package, and it holds unpublished
+    //       drafts and private-project wiki pages alongside published content.
+    //       DEFAULT 0 makes the gate fail closed: a row nobody has classified is
+    //       withheld, never leaked. See src/public-allowlist.ts.
+    "ALTER TABLE articles ADD COLUMN public INTEGER NOT NULL DEFAULT 0",
   ];
 
   for (const sql of alterColumns) {
     try {
       database.exec(sql);
+      // WHAT: One-time backfill of the publication gate for already-published
+      //       newsletter content.
+      // WHY:  Runs only on the run that actually adds the column — every later
+      //       attempt throws above and skips this. Re-running on each open would
+      //       silently revert deliberate manual overrides. Rows not matched here
+      //       stay 0 and are classified by their own pipeline (sync-wiki.ts).
+      //       `draft` is excluded on purpose: ingest-drafts.ts ingests
+      //       unpublished drafts that inherit source_origin 'astgl-site' from the
+      //       column default, so origin alone cannot separate them.
+      if (sql.includes("ADD COLUMN public")) {
+        // WHY: Types come from PUBLISHED_SITE_TYPES rather than a literal list.
+        //      A hand-copied `IN (...)` here would be a second definition of
+        //      "published" that silently diverges the first time the allowlist
+        //      changes (Mistake #8) — the exact drift public-allowlist.ts exists
+        //      to prevent.
+        const types = [...PUBLISHED_SITE_TYPES];
+        database
+          .prepare(
+            `UPDATE articles SET public = 1
+             WHERE source_origin = 'astgl-site'
+               AND content_type IN (${types.map(() => "?").join(",")})`
+          )
+          .run(...types);
+      }
     } catch {
       // Column already exists — expected after first run
     }
@@ -67,6 +98,9 @@ function runMigrations(database: InstanceType<typeof Database>): void {
   );
   database.exec(
     "CREATE INDEX IF NOT EXISTS idx_articles_source_origin ON articles(source_origin)"
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_articles_public ON articles(public)"
   );
 
   database.exec(`
@@ -263,7 +297,8 @@ export function upsertArticle(
         `UPDATE articles SET title = ?, description = ?, slug = ?,
          source_url = ?, content_type = ?, json_ld = ?, processed_at = ?,
          pub_date = COALESCE(?, pub_date), tags = COALESCE(?, tags),
-         source_origin = COALESCE(?, source_origin)
+         source_origin = COALESCE(?, source_origin),
+         public = COALESCE(?, public)
          WHERE id = ?`
       )
       .run(
@@ -277,13 +312,16 @@ export function upsertArticle(
         article.pubDate || null,
         tagsJson,
         article.sourceOrigin || null,
+        // WHY: COALESCE so a caller that doesn't classify publication (every
+        //      pipeline except sync-wiki) can never silently flip a row's gate.
+        article.isPublic === undefined ? null : article.isPublic ? 1 : 0,
         existing.id
       );
   } else {
     database
       .prepare(
-        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date, tags, source_origin)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO articles (title, description, url, slug, source_url, content_type, json_ld, processed_at, pub_date, tags, source_origin, public)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         article.title,
@@ -296,7 +334,11 @@ export function upsertArticle(
         article.processedAt,
         article.pubDate || null,
         tagsJson ?? "[]",
-        article.sourceOrigin || "astgl-site"
+        article.sourceOrigin || "astgl-site",
+        // WHY: New rows default to withheld. A pipeline that doesn't classify
+        //      publication must never mint a public row by omission — that is
+        //      the whole point of a fail-closed gate.
+        article.isPublic ? 1 : 0
       );
   }
 }

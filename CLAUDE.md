@@ -24,7 +24,8 @@ whole file before your first edit.
 
 | DB | Written by | Read by | Notes |
 |---|---|---|---|
-| `knowledge.db` | `ingest.ts` (DESTRUCTIVE rebuild), `knowledge-db.ts` (sanctioned incremental path used by structure/drafts/projects/wiki/freshness/rewrite), `ideas.ts`, `related-articles.ts` | MCP server (read-only), everything else | **Tracked in git and shipped in the npm package.** Committing it is deliberate, not an accident. |
+| `knowledge.db` | `ingest.ts` (DESTRUCTIVE rebuild), `knowledge-db.ts` (sanctioned incremental path used by structure/drafts/projects/wiki/freshness/rewrite), `ideas.ts`, `related-articles.ts` | MCP server (read-only), everything else | Tracked in git. **NO LONGER SHIPPED** — as of 2026-07-29 the package ships the pruned `build/knowledge-public.db` instead (ADR-0001). |
+| `build/knowledge-public.db` | `build-public-db.ts` only | the published npm package | **Gitignored build artifact, regenerated on every publish.** Contains only `public = 1` rows. Never commit it — two databases in the repo can disagree. |
 | `query-log.db` | `query-log.ts` (buffered), `rate-limit.ts` | daily-report, alerts, dashboard, ideas | WAL mode; `-wal`/`-shm` sidecars are normal. Gitignored. `content_cited` is JSON `'[]'`, never NULL — claudeclaw reads it. |
 | `discovery.db` | `discover.ts` via `discovery-db.ts` | `structure.ts` (opens it raw — known wart) | Crawl queue; `is_new=1` marks unprocessed. Gitignored. |
 | `alerts.db` | `alerts.ts` AND `freshness.ts` (duplicate schema, different cooldowns — 24h vs 7d) | same | Alert dedup history. Gitignored. |
@@ -330,3 +331,28 @@ under `.claude/skills/`:
   plist → Maester descriptor → bootstrap + smoke test.
 - `/astgl-db-surgeon` — safe `knowledge.db` operations: integrity checks, article
   retirement, re-index routing, WAL checkpoints, backup management.
+
+## The publication gate (added 2026-07-29, ADR-0001)
+
+`data/knowledge.db` holds more than the public is meant to see: 201 unpublished article
+drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
+
+- **`articles.public`** — `INTEGER NOT NULL DEFAULT 0`, fail-closed. A row nobody classified
+  is withheld, never leaked.
+- **`src/public-allowlist.ts`** — the only definition of "public". `isPublic()` is shared by
+  the write path and the prune path so they cannot drift (Mistake #8).
+- **`npm run build-public-db`** — copies, prunes `public = 0` via `deleteArticle()`, VACUUMs,
+  and verifies the artifact (zero withheld rows, zero orphan chunks, **zero orphan
+  embeddings** — sqlite-vec has no cascading delete, so withheld vectors could otherwise stay
+  searchable). Never mutates the source. `--dry-run` supported.
+- **`npm run reclassify-wiki`** — re-derives `public` for already-indexed rows without
+  re-embedding. Sync is mtime-incremental, so an unchanged page is never re-processed and an
+  allowlist edit would otherwise change nothing. Available to run by hand, but you do not
+  have to remember to: it is wired into `prepublishOnly`.
+- **`prepublishOnly`** runs build → **reclassify** → prune, in that order, so a publish can
+  neither skip the gate nor ship flags that predate the current allowlist. Do not reorder or
+  drop the reclassify step — without it, editing `public-allowlist.ts` and publishing would
+  ship stale `public = 1` rows.
+
+→ **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
+DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.

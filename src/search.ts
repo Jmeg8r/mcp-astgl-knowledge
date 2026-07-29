@@ -12,7 +12,6 @@
  *   - listTopics uses GROUP_CONCAT instead of in-memory join
  */
 
-import { join } from "path";
 import { existsSync } from "fs";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
@@ -25,8 +24,8 @@ import {
   LatestArticle,
   EMBEDDING_DIM,
 } from "./types.js";
+import { resolveKnowledgeDbPath, describeSearchedPaths } from "./db-path.js";
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
 
@@ -36,9 +35,10 @@ let db: ReturnType<typeof Database> | null = null;
 
 function getDb(): ReturnType<typeof Database> {
   if (!db) {
+    const DB_PATH = resolveKnowledgeDbPath();
     if (!existsSync(DB_PATH)) {
       throw new Error(
-        `Knowledge database not found at ${DB_PATH}. Run 'npm run ingest' first.`
+        `Knowledge database not found at ${describeSearchedPaths()}. Run 'npm run ingest' first.`
       );
     }
     db = new Database(DB_PATH, { readonly: true });

@@ -7,20 +7,22 @@
 
 import { join } from "path";
 import { existsSync } from "fs";
+import { resolveKnowledgeDbPath, describeSearchedPaths } from "./db-path.js";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { insertIdea, getIdeas } from "./knowledge-db.js";
 import type { Idea, IdeaFilters, IdeaSource, IdeaPriority } from "./types.js";
 
 const QUERY_LOG_PATH = join(import.meta.dirname, "..", "data", "query-log.db");
-const KNOWLEDGE_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
-
 // WHAT: Open a dedicated write connection to knowledge.db
 // WHY: The MCP server's search.ts holds a read-only singleton — we need our own connection
 function openKnowledgeDb(): InstanceType<typeof Database> {
+  // WHY: Resolved via db-path.ts so an installed package (which ships only the
+  //      pruned build/knowledge-public.db) finds a database instead of throwing.
+  const KNOWLEDGE_PATH = resolveKnowledgeDbPath();
   if (!existsSync(KNOWLEDGE_PATH)) {
     throw new Error(
-      `Knowledge database not found at ${KNOWLEDGE_PATH}. Run 'npm run ingest' first.`
+      `Knowledge database not found at ${describeSearchedPaths()}. Run 'npm run ingest' first.`
     );
   }
   const db = new Database(KNOWLEDGE_PATH);

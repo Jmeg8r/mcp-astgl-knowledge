@@ -5,18 +5,21 @@
  * WHY: Enables content reuse — articles, roundups, and FAQ compilations from the KB
  */
 
-import { join } from "path";
 import { existsSync } from "fs";
+import { resolveKnowledgeDbPath, describeSearchedPaths } from "./db-path.js";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { searchArticles } from "./search.js";
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
-
 function openReadonly(): InstanceType<typeof Database> {
+  // WHY: Resolved per call, not at module load. db-path.ts deliberately re-checks
+  //      each time so a build that produces the pruned artifact mid-process is
+  //      picked up; caching the choice here would freeze a stale path and make
+  //      export fail against a database that exists.
+  const DB_PATH = resolveKnowledgeDbPath();
   if (!existsSync(DB_PATH)) {
     throw new Error(
-      `Knowledge database not found at ${DB_PATH}. Run 'npm run ingest' first.`
+      `Knowledge database not found at ${describeSearchedPaths()}. Run 'npm run ingest' first.`
     );
   }
   const db = new Database(DB_PATH, { readonly: true });
