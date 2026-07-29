@@ -314,11 +314,11 @@ function reclassifyExisting(): void {
       const want = isPublic(row.content_type, "secondbrain", row.title) ? 1 : 0;
       if (want !== row.public) {
         changed++;
-        // WHY: Name every gate flip, in both modes. Concepts publish by denylist
-        //      default (see public-allowlist.ts), so a newly written concept
-        //      going public is exactly the event nobody would otherwise notice —
-        //      and prepublishOnly runs this immediately before the prune, so
-        //      these lines print at publish time.
+        // WHY: Name every gate flip, in both modes. The gate is fail-closed, so
+        //      a page becoming public means someone edited public-allowlist.ts —
+        //      printing which page makes the consequence of that edit visible
+        //      rather than inferred from a count. prepublishOnly runs this
+        //      immediately before the prune, so the lines appear at publish time.
         console.error(
           `    ${want === 1 ? "→ PUBLIC  " : "→ withheld"} [${row.content_type}] ${row.title.slice(0, 58)}`
         );

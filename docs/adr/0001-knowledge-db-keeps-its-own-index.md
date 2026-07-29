@@ -281,3 +281,32 @@ Also added: `npm run reclassify-wiki`, which re-derives `public` for already-ind
 without re-embedding. Without it, `sync-wiki.ts`'s mtime-incremental skip meant an unchanged
 page would keep whatever gate value it had, and **editing the allowlist would re-gate
 nothing** — the allowlist would have been decorative for existing content.
+
+## Amendment (2026-07-29, later) — concepts moved to an allowlist
+
+The gate shipped with concepts governed by a *denylist* (`CONCEPT_DENYLIST`) while entities
+used an allowlist. The reasoning was that concepts are portable original writing and
+per-page approval is friction that discourages producing them.
+
+Review surfaced the flaw: under a denylist a **newly written concept published without ever
+having been looked at**, and the audit behind the original decision only covered the 74
+concepts that existed on 2026-07-29. The module simultaneously claimed to be fail-closed,
+which was false for exactly that path.
+
+The first response was to keep the policy and add visibility — `reclassify-wiki` names every
+gate flip and runs immediately before the prune, so a newly-public concept prints at publish
+time. On reflection that is a weaker control than simply naming what ships: it depends on
+someone reading publish output and reacting, which is the same human-memory dependency the
+`prepublishOnly` fix had just removed.
+
+**Concepts are now allowlisted** (`CONCEPT_ALLOWLIST`, 68 titles). The gate is fail-closed
+with no exceptions: an unrecognized content type, an unrecognized origin, an unnamed entity,
+and an unnamed concept are all withheld. Nothing publishes by default; every published page
+is named in `src/public-allowlist.ts`.
+
+Classification is unchanged — still 100 wiki pages public, 90 withheld — because the
+allowlist was generated from the rows the denylist was already publishing. What changed is
+the behaviour for content that does not exist yet.
+
+Verified across all input classes, including the case that motivated the change: a concept
+title absent from the allowlist resolves to withheld rather than public.

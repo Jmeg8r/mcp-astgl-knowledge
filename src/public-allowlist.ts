@@ -12,24 +12,20 @@
  *       docs/adr/0001-knowledge-db-keeps-its-own-index.md and
  *       docs/entity-allowlist.md.
  *
- * Fail-closed everywhere EXCEPT wiki concepts. `isPublic()` returns false for an
- * unrecognized content_type, an unrecognized source_origin, and any wiki entity
- * not named in ENTITY_ALLOWLIST. Concepts are the deliberate exception: they are
- * governed by a *denylist*, so a newly written concept page publishes unless
- * someone adds it to CONCEPT_DENYLIST first.
+ * Fail-closed, with no exceptions. `isPublic()` returns false for an unrecognized
+ * content_type, an unrecognized source_origin, any wiki entity not named in
+ * ENTITY_ALLOWLIST, and any wiki concept not named in CONCEPT_ALLOWLIST. Nothing
+ * publishes by default; every published page is named somewhere in this file.
  *
- * That asymmetry is James's decision of 2026-07-29 ("ship the concepts,
- * allowlist the entities") and it is a real trade-off, stated here rather than
- * papered over: concepts are portable original thinking and allowlisting each
- * one is friction that would discourage writing them; entities are where the
- * generic stubs and private ventures live. The residual risk is that the
- * approved audit covered the 74 concepts that existed on 2026-07-29 — a concept
- * written later has never been reviewed and ships by default.
+ * Concepts were denylist-governed when the gate first shipped, on the reasoning
+ * that per-page approval is friction that discourages writing them. That was
+ * reversed on 2026-07-29: under a denylist a newly written concept published
+ * without ever having been looked at, and the audit behind the original decision
+ * only ever covered the 74 concepts that existed that day. Visibility at publish
+ * time was a weaker control than simply naming what ships.
  *
- * The mitigation is visibility, not enforcement: `reclassify-wiki` names every
- * page whose gate flips, and `prepublishOnly` runs it immediately before the
- * prune, so a newly-public concept is printed at publish time. If that proves
- * too weak, switch concepts to an allowlist — the shape is already here.
+ * Adding a title here IS the publication decision. After editing, run
+ * `npm run reclassify-wiki` — or just publish, since `prepublishOnly` runs it.
  */
 
 // WHAT: astgl-site content types that represent published newsletter output.
@@ -47,15 +43,84 @@ export const PUBLISHED_SITE_TYPES = new Set([
   "faq",
 ]);
 
-// WHAT: Wiki concept pages withheld despite carrying the astgl tag.
-// WHY:  Internal jargon that reads as noise to anyone outside this machine.
-export const CONCEPT_DENYLIST = new Set([
-  "editorial glow",
-  "learnings-jsonl",
-  "Substack safe zone",
-  "Extraction pipeline misses vault narrative",
-  "Source-Seed Copy Defect",
-  "platform char limits vary by url counting",
+// WHAT: The 68 wiki concept pages approved for publication.
+// WHY:  Concepts moved from a denylist to an allowlist on 2026-07-29. Under the
+//       denylist a newly written concept published by default, so the corpus
+//       could grow public pages nobody had reviewed — the audit only ever
+//       covered the 74 concepts that existed that day. An allowlist makes the
+//       whole module fail closed: new writing is withheld until it is named
+//       here, which is a deliberate act rather than an omission.
+//       Adding an entry is the publication decision. After editing, run
+//       `npm run reclassify-wiki` (or just publish — prepublishOnly runs it).
+export const CONCEPT_ALLOWLIST = new Set([
+  "A Keyframe Stores the End State, Not the Motion",
+  "AI-Assisted Single-Session Application Development",
+  "Agent-Backed Workspace from Export",
+  "Automated Secret Prevention via Pre-Commit",
+  "Automation Feedback Loops Without Boundaries",
+  "Autoresearch",
+  "Autoresearch Discipline Pattern",
+  "Byte-Offset Seeking",
+  "Cache Coherence Pattern: Authoritative Source",
+  "Cascading Failures",
+  "Character as Code",
+  "Cheap production removes the validation forcing function, not the need for it",
+  "Clear-Then-Save Pattern",
+  "Code Deletion as Improvement",
+  "Code Smell",
+  "Compound Engineering",
+  "Compound Engineering Workflow",
+  "Confidence over boolean",
+  "Confidence scoring",
+  "Content as MCP Knowledge Server",
+  "Context-loaded AI coworker system",
+  "Cost-Chokepoint Pattern",
+  "De-Fabrication Gate",
+  "Dependency Inversion for Community Features",
+  "Dual-Instance Architecture",
+  "Event Sourcing Pattern",
+  "Fallback Chains",
+  "File Ownership Determines Permissions",
+  "Filesystem as Queue",
+  "Fixed-Font Canvas Sizing",
+  "Fleet-Scale SSH Key Auditing",
+  "Framework choice as a multiplier",
+  "Framing determines the economics, structurally",
+  "Free Tier as Marketing Channel",
+  "Git Hooks",
+  "GitHub Actions as Monetized Wrappers",
+  "Grounding Changes the Thesis",
+  "Hard-fail over silent degradation",
+  "Hidden Dependencies",
+  "Honor the source's stated scope",
+  "Infrastructure Reuse Over Custom Implementation",
+  "Library-Executable Split",
+  "Local-First Pipeline Architecture",
+  "Loop Engineering",
+  "Loop Engineering Leverage Shift",
+  "MCP Server Security Audit Framework",
+  "Matrix Builds for Configuration Coverage",
+  "Mermaid Mindmap Dark-Theme Fails",
+  "Migration-First Schema Design",
+  "NOT NULL Column Migration Pattern",
+  "Owned-Audience Engine",
+  "Pattern Mining from AI Config",
+  "Prompt-Based Guardrails Illusion",
+  "Prove a behavior-preserving refactor byte-identical",
+  "Provenance-Clean AI Content",
+  "Real-Data Testing",
+  "Render-Verification Catches Code-Invisible Bugs",
+  "SEO Doc 16-Section Standard",
+  "Scheduler stores a path, uploads the image at post time",
+  "Self-Hosted AI Agents for Transparency and Autonomy",
+  "Self-Taught AI Engineering via Shipping",
+  "Simplicity Over Premature Abstraction",
+  "Speak the Downstream Tool's Conventions",
+  "Strategy Pattern for Switch Statement Refactoring",
+  "System Registry Pattern",
+  "The 9-Step Operational Loop for AI-Assisted Senior Engineering",
+  "Three-Layer Defense",
+  "Version Mismatch Gotcha",
 ]);
 
 // WHAT: The 32 wiki entities approved for publication (docs/entity-allowlist.md).
@@ -113,7 +178,7 @@ export function isPublic(
   title: string
 ): boolean {
   if (sourceOrigin === "secondbrain") {
-    if (contentType === "concept") return !CONCEPT_DENYLIST.has(title);
+    if (contentType === "concept") return CONCEPT_ALLOWLIST.has(title);
     if (contentType === "entity") return ENTITY_ALLOWLIST.has(title);
     return false; // synthesis and anything new: withheld until decided
   }

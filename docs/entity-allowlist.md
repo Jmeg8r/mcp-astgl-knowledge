@@ -4,8 +4,13 @@
 **Governs**: which `content_type = 'entity'` wiki pages get `public = 1` (see ADR-0001)
 
 All 116 tagged entities are bucketed below; every one appears exactly once, verified against
-`knowledge.db`. Concepts are not listed — they ship by default under ADR-0001, less the six
-internal-jargon pages noted there.
+`knowledge.db`. Concepts are governed by a separate list of 68 titles in
+`CONCEPT_ALLOWLIST` — as of 2026-07-29 they are allowlisted too, not shipped by default.
+
+> **`src/public-allowlist.ts` is authoritative.** This document records *why* each entity
+> was bucketed; the code decides what actually ships. If the two disagree, the code wins and
+> this file is the thing that is wrong. Keep the Ship section and `ENTITY_ALLOWLIST` in sync
+> — 32 entries in both.
 
 Anything not in **Ship** stays `public = 0`, which is also the fail-closed default: an
 entity accidentally omitted from this file does not ship.
@@ -110,7 +115,8 @@ workspace.
 | Withheld | 84 | 6 | 90 |
 | Currently indexed | 116 | 74 | 190 |
 
-Concepts assume the six internal-jargon pages from ADR-0001 are dropped (`editorial glow`,
+The 68 published concepts are the 74 tagged concept pages less six internal-jargon pages
+(`editorial glow`,
 `learnings-jsonl`, `Substack safe zone`, `Extraction pipeline misses vault narrative`,
 `Source-Seed Copy Defect`, `platform char limits vary by url counting`).
 
