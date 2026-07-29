@@ -9,7 +9,7 @@
   },
   "files": [
     "dist",
-    "data/knowledge.db",
+    "build/knowledge-public.db",
     "README.md"
   ],
   "scripts": {
@@ -30,11 +30,13 @@
     "rewrite-queue:dev": "pass-cli run --env-file .env -- tsx src/rewrite-queue.ts",
     "publish-rewrite": "pass-cli run --env-file .env -- node dist/publish-rewrite.js",
     "sync-wiki": "tsx src/sync-wiki.ts",
+    "reclassify-wiki": "tsx src/sync-wiki.ts --reclassify",
+    "build-public-db": "tsx src/build-public-db.ts",
     "related": "tsx src/related-articles.ts",
     "dashboard-data": "tsx src/dashboard.ts",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run build-public-db"
   },
   "repository": {
     "type": "git",

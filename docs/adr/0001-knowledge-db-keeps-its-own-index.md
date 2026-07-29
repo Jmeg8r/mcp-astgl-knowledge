@@ -126,19 +126,19 @@ the vault it means "relates to my newsletter's subject area," which is why `Vite
 publish this." An organizing label is applied generously; a disclosure gate must fail
 closed. One field cannot be both.
 
-> [!WARNING]
-> **Everything in this subsection is DESIGN, NOT IMPLEMENTATION — none of it is built or
-> enforced as of 2026-07-29.** There is currently no `public` column, no publish-time
-> filtering, and no pruned build artifact. **The live release path still ships
-> `data/knowledge.db` verbatim**, so any release cut today publishes every synced wiki page
-> regardless of the allowlist. Do not treat the fail-closed gate as protection that exists.
-> Tracking: implementation is deliberately out of scope for this PR and gated on approval
-> per the operating manual.
+> [!NOTE]
+> **Implemented 2026-07-29.** This subsection described planned work when the ADR merged;
+> the gate now exists and is verified. `articles.public` (fail-closed), classification in
+> `sync-wiki.ts`, `npm run reclassify-wiki`, and `npm run build-public-db` are all live, and
+> `package.json` `files` ships `build/knowledge-public.db` rather than `data/knowledge.db`.
+> Measured result: **178 of 469 articles publish** — 78 published newsletter pieces, 68
+> concepts, 32 allowlisted entities; 291 withheld, of which **201 are unpublished drafts**
+> (see the amendment below).
 
-**Where the gate will sit: publish time, not ingest time (decided 2026-07-29).** MAESTER and
+**Where the gate sits: publish time, not ingest time (decided 2026-07-29).** MAESTER and
 local use keep the full 190-page tagged set, so the gate cannot be a `sync-wiki.ts` skip —
-that would strip content the local consumer wants. Instead `articles` will gain a `public`
-column (default `0`, fail-closed), `sync-wiki.ts` will set it from the concept/entity rule
+that would strip content the local consumer wants. Instead `articles` gains a `public`
+column (default `0`, fail-closed), `sync-wiki.ts` sets it from the concept/entity rule
 plus an allowlist, and the working `knowledge.db` continues to hold everything.
 
 **The load-bearing distinction: prune the artifact, do not filter the query.** "Publish-time
@@ -148,19 +148,22 @@ costume of a fix: the private rows would still ship inside the published package
 query or one `better-sqlite3` open away from anyone who downloaded it. The gate is only
 real if the excluded rows are absent from the shipped file. Accordingly:
 
-Planned mechanisms, none of which exist yet:
+Mechanisms, all shipped 2026-07-29:
 
-- `npm run build-public-db` (to be written) copies `data/knowledge.db` to a build path,
+- `npm run build-public-db` copies `data/knowledge.db` to `build/knowledge-public.db`,
   deletes rows where `public = 0` — routed through `deleteArticle()` so `vec_chunks` is
   cleaned transactionally (Mistake #4) — `VACUUM`s, and asserts a non-zero remaining count.
-- `package.json` `files` is to be repointed at the pruned artifact. **It currently points at
-  `data/knowledge.db`.**
-- The publish path is to fail loudly if the pruned DB is missing or older than the working
-  DB — a stale artifact must not ship silently, which is the exact failure this ADR exists
-  to prevent.
-
-Until all three land, the only real control is manual: **do not cut a release from this
-branch's state.**
+  It never mutates the source. `--dry-run` reports the full classification and a sample of
+  what would be pruned.
+- `package.json` `files` ships `build/knowledge-public.db`; `data/knowledge.db` is no longer
+  in the package. `prepublishOnly` runs the build, so a publish cannot skip the prune.
+- `src/db-path.ts` resolves which database to read — the full one locally, the pruned one on
+  an installed package — so the server, `ideas.ts`, and `export.ts` cannot disagree.
+- Post-prune verification asserts on the artifact itself: zero withheld rows, zero orphan
+  chunks, and **zero orphan embeddings**. That last check is the one that matters — sqlite-vec
+  has no cascading delete, so withheld vectors could otherwise survive their rows and keep
+  matching KNN searches. Verified functionally: semantic queries aimed at withheld draft
+  titles return zero drafts from the artifact.
 
 ### What the investigation found instead
 
@@ -249,3 +252,32 @@ sixth place to look.
   stamped in the vault's own frontmatter? The repo version is auditable in git and reviewable
   in a PR; the vault version keeps the decision next to the content. Leaning repo, because
   the publish decision belongs to the thing that publishes.
+
+---
+
+## Amendment (2026-07-29) — the drafts finding
+
+Implementing the gate surfaced a larger exposure than the one this ADR was written to
+address.
+
+`ingest-drafts.ts` reads **unpublished** article drafts from
+`/Volumes/Research/Publishing/ASTGL/Articles/Drafts` and does not set `sourceOrigin`, so
+those rows inherit `'astgl-site'` from the column default. At the time of writing that is
+**201 articles and 1,725 searchable chunks** — 43% of the database — sitting in the file
+that `package.json` shipped verbatim. A release cut before this change would have published
+every unpublished draft in full text, searchable by vector.
+
+Consequences for the design:
+
+- **`source_origin` alone cannot decide publication.** The gate keys on `content_type` as
+  well, via an explicit `PUBLISHED_SITE_TYPES` allowlist that deliberately omits `draft`.
+- **The gate is a publication filter, not a wiki filter.** The wiki question that prompted
+  this ADR turned out to be the smaller half: 90 wiki pages withheld against 201 drafts.
+- **Fail-closed earns its keep on unknown origins too.** `ingest-projects.ts` and any future
+  pipeline produce rows the allowlist does not recognise, and those are withheld by default
+  rather than leaked by omission.
+
+Also added: `npm run reclassify-wiki`, which re-derives `public` for already-indexed rows
+without re-embedding. Without it, `sync-wiki.ts`'s mtime-incremental skip meant an unchanged
+page would keep whatever gate value it had, and **editing the allowlist would re-gate
+nothing** — the allowlist would have been decorative for existing content.

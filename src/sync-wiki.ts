@@ -27,6 +27,7 @@ import {
   closeKnowledgeDb,
 } from "./knowledge-db.js";
 import type { StructuredArticle, Chunk, ContentType } from "./types.js";
+import { isPublic } from "./public-allowlist.js";
 
 const WIKI_ROOT =
   process.env.WIKI_ROOT ||
@@ -45,6 +46,13 @@ const WIKI_DIRS: Array<{ dir: string; type: ContentType }> = [
 const FLAGS = {
   full: process.argv.includes("--full"),
   dryRun: process.argv.includes("--dry-run"),
+  // WHAT: Re-apply the publication gate to already-indexed wiki rows and exit.
+  // WHY:  Sync is mtime-incremental, so an unchanged page is never re-processed
+  //       and would keep whatever `public` value it had — including the
+  //       fail-closed 0 every pre-gate row starts with. Editing
+  //       public-allowlist.ts must be able to re-gate the corpus WITHOUT
+  //       re-embedding 931 chunks to change a boolean.
+  reclassify: process.argv.includes("--reclassify"),
 };
 
 // --- Sync State ---
@@ -273,7 +281,73 @@ function buildSlug(type: string, fileSlug: string): string {
 
 // --- Main ---
 
+// WHAT: Re-derive `public` for every already-indexed wiki row from the current
+//       allowlist, touching no embeddings.
+// WHY:  The gate must be able to change without a re-sync. This is the path that
+//       runs after editing public-allowlist.ts, and the path that classifies rows
+//       indexed before the gate existed. Reads no files from the vault, so it
+//       works with the Research volume unmounted.
+function reclassifyExisting(): void {
+  console.error("=== Reclassify publication gate (no embedding) ===\n");
+
+  const db = initKnowledgeDb();
+  const rows = db
+    .prepare(
+      "SELECT url, title, content_type FROM articles WHERE source_origin = 'secondbrain'"
+    )
+    .all() as Array<{ url: string; title: string; content_type: string }>;
+
+  const update = db.prepare("UPDATE articles SET public = ? WHERE url = ?");
+  let toPublic = 0;
+  let toWithheld = 0;
+  let changed = 0;
+
+  const apply = db.transaction(() => {
+    for (const row of rows) {
+      const want = isPublic(row.content_type, "secondbrain", row.title) ? 1 : 0;
+      const current = (
+        db.prepare("SELECT public FROM articles WHERE url = ?").get(row.url) as {
+          public: number;
+        }
+      ).public;
+      if (want !== current) changed++;
+      if (FLAGS.dryRun) {
+        if (want !== current) {
+          console.error(
+            `    Would set public=${want}: [${row.content_type}] ${row.title.slice(0, 58)}`
+          );
+        }
+      } else {
+        update.run(want, row.url);
+      }
+      if (want === 1) toPublic++;
+      else toWithheld++;
+    }
+  });
+  apply();
+
+  if (!FLAGS.dryRun) closeKnowledgeDb();
+
+  console.error(
+    `\n=== ${rows.length} wiki rows: ${toPublic} public, ${toWithheld} withheld (${changed} changed) ===`
+  );
+  console.log(
+    JSON.stringify({
+      reclassified: rows.length,
+      pages_public: toPublic,
+      pages_withheld: toWithheld,
+      pages_changed: changed,
+      dry_run: FLAGS.dryRun,
+    })
+  );
+}
+
 async function main() {
+  if (FLAGS.reclassify) {
+    reclassifyExisting();
+    return;
+  }
+
   console.error("=== SecondBrain Wiki Sync ===\n");
 
   if (FLAGS.dryRun) console.error("  [DRY RUN — no changes will be written]\n");
@@ -308,6 +382,12 @@ async function main() {
   let chunksTotal = 0;
   let orphansRetired = 0;
   let failed = 0;
+  // WHAT: Count how many synced pages the publication gate lets through.
+  // WHY: The gap between "indexed" and "publishable" must be a number in the
+  //      summary, not an assumption — a silently-shrinking public set is the
+  //      same invisible failure as a silently-stale one.
+  let publicPages = 0;
+  let withheldPages = 0;
 
   const seenUrls = new Set<string>();
 
@@ -392,10 +472,16 @@ async function main() {
         continue;
       }
 
+      const pageIsPublic = isPublic(type, "secondbrain", title);
+
       if (FLAGS.dryRun) {
-        console.error(`    Would sync: ${sourceFile} → ${type} "${title}" (${chunks.length} chunks)`);
+        console.error(
+          `    Would sync: ${sourceFile} → ${type} "${title}" (${chunks.length} chunks) [${pageIsPublic ? "public" : "withheld"}]`
+        );
         synced++;
         chunksTotal += chunks.length;
+        if (pageIsPublic) publicPages++;
+        else withheldPages++;
         continue;
       }
 
@@ -435,6 +521,12 @@ async function main() {
           processedAt: new Date().toISOString(),
           tags: parsed.fm.tags,
           sourceOrigin: "secondbrain",
+          // WHAT: Classify publication eligibility at sync time.
+          // WHY: The `astgl` tag above gates *indexing*; this gates *publishing*.
+          //      They are different questions — `Vite` and `Income Investor` are
+          //      both correctly tagged and both correctly withheld. Stored on the
+          //      row so build-public-db.ts can prune without re-deriving the rule.
+          isPublic: pageIsPublic,
         };
 
         upsertArticle(knowledgeDb!, article);
@@ -449,7 +541,11 @@ async function main() {
 
         synced++;
         chunksTotal += chunks.length;
-        console.error(`    Synced: ${sourceFile} → ${chunks.length} chunks`);
+        if (pageIsPublic) publicPages++;
+        else withheldPages++;
+        console.error(
+          `    Synced: ${sourceFile} → ${chunks.length} chunks [${pageIsPublic ? "public" : "withheld"}]`
+        );
       } catch (err) {
         // WHY: keep url in seenUrls so a transient embed failure never triggers
         //      orphan retirement of an otherwise-valid page.
@@ -521,6 +617,8 @@ async function main() {
     pages_skipped_parse_error: skippedParseError,
     orphans_retired: orphansRetired,
     chunks_created: chunksTotal,
+    pages_public: publicPages,
+    pages_withheld: withheldPages,
     dry_run: FLAGS.dryRun,
     full_sync: FLAGS.full,
   };

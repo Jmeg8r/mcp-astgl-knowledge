@@ -5,18 +5,20 @@
  * WHY: Enables content reuse — articles, roundups, and FAQ compilations from the KB
  */
 
-import { join } from "path";
 import { existsSync } from "fs";
+import { resolveKnowledgeDbPath, describeSearchedPaths } from "./db-path.js";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { searchArticles } from "./search.js";
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
+// WHY: Resolved via db-path.ts so an installed package (which ships only the
+//       pruned build/knowledge-public.db) finds a database instead of throwing.
+const DB_PATH = resolveKnowledgeDbPath();
 
 function openReadonly(): InstanceType<typeof Database> {
   if (!existsSync(DB_PATH)) {
     throw new Error(
-      `Knowledge database not found at ${DB_PATH}. Run 'npm run ingest' first.`
+      `Knowledge database not found at ${describeSearchedPaths()}. Run 'npm run ingest' first.`
     );
   }
   const db = new Database(DB_PATH, { readonly: true });

@@ -110,6 +110,12 @@ export interface StructuredArticle {
   // WHY: Enables structured "find articles tagged X" search via find_articles.
   tags?: string[];
   sourceOrigin?: string;
+  // WHAT: Publication gate. true = eligible for the published npm artifact.
+  // WHY: Optional and fail-closed — omitting it leaves an existing row's gate
+  //      untouched (COALESCE on update) and mints new rows withheld. Only
+  //      pipelines that actually decide publication should set it.
+  //      See src/public-allowlist.ts.
+  isPublic?: boolean;
 }
 
 export const EMBEDDING_DIM = 768;
