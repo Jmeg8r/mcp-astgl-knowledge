@@ -119,9 +119,28 @@ Net: roughly **70–80 pages of the strongest material** instead of 190 pages of
 the vault it means "relates to my newsletter's subject area," which is why `Vite` and
 `Income Investor` both carry it; for a public index it would need to mean "I chose to
 publish this." An organizing label is applied generously; a disclosure gate must fail
-closed. One field cannot be both. The mechanism is a `public: true` frontmatter field
-checked in `sync-wiki.ts` alongside the tag, defaulting closed — enforced, not
-conventional, in the same spirit as the vault's `raw/` immutability hook.
+closed. One field cannot be both.
+
+**Where the gate sits: publish time, not ingest time (decided 2026-07-29).** MAESTER and
+local use keep the full 190-page tagged set, so the gate cannot be a `sync-wiki.ts` skip —
+that would strip content the local consumer wants. Instead `articles` gains a `public`
+column (default `0`, fail-closed), `sync-wiki.ts` sets it from the concept/entity rule plus
+an allowlist, and the working `knowledge.db` continues to hold everything.
+
+**The load-bearing distinction: prune the artifact, do not filter the query.** "Publish-time
+filter" means a build step that emits a *pruned copy* of the database for the tarball.
+Filtering inside the MCP tool handlers instead would be a security defect wearing the
+costume of a fix: the private rows would still ship inside the published package, one SQL
+query or one `better-sqlite3` open away from anyone who downloaded it. The gate is only
+real if the excluded rows are absent from the shipped file. Accordingly:
+
+- `npm run build-public-db` copies `data/knowledge.db` to a build path, deletes rows where
+  `public = 0` — routed through `deleteArticle()` so `vec_chunks` is cleaned transactionally
+  (Mistake #4) — `VACUUM`s, and asserts a non-zero remaining count.
+- `package.json` `files` points at the pruned artifact, never at `data/knowledge.db`.
+- The publish path fails loudly if the pruned DB is missing or older than the working DB —
+  a stale artifact must not ship silently, which is the exact failure this ADR exists to
+  prevent.
 
 ### What the investigation found instead
 
@@ -152,11 +171,14 @@ that does not cross the boundary it is meant to police reports motion, not diver
 - `sync-wiki.ts` gains a second filter and a counter
   (`pages_skipped_not_public`) in its stdout summary, so the gap between tagged and
   published is a number rather than an assumption.
-- Pages already indexed that fail the new gate must be **retired**, not merely skipped —
-  the existing orphan sweep handles this correctly, since a page dropped from the eligible
-  set leaves `seenUrls` and is deleted via `deleteArticle()`. Verify this on a DB copy
-  before the first live run; a gate change that silently strips ~110 articles is exactly
-  the shape of Mistake #2.
+- Because the gate moved to publish time, the working `knowledge.db` is **not** re-scoped
+  and the orphan-retirement hazard is avoided entirely: no already-indexed page is dropped,
+  it is merely marked `public = 0`. The ~110 excluded articles disappear only from the
+  pruned build artifact. This is the main reason publish-time filtering is the safer
+  placement, independent of MAESTER's needs.
+- The pruned artifact is a new build output that must be gitignored and regenerated, not
+  committed — otherwise the repo carries two databases that can disagree, which is the
+  original defect in a new costume.
 - Two sync holes remain open, both of which can silently stale the data:
   - `sync-wiki.ts` detects change by **mtime only**. A content edit that preserves mtime
     (rsync, git checkout, some Obsidian sync paths) is skipped permanently. Content-hashing
@@ -199,7 +221,11 @@ sixth place to look.
 - What is the right republish cadence once the gap is closed — every wiki-sync, weekly, or
   on article publish? The instrument should be built first; the cadence follows from what
   it shows.
-- Does MAESTER's local usage want the full 190-page tagged set while the public package
-  gets the ~75-page allowlist? If so the gate is a *publish-time* filter rather than a
-  sync-time one, and `knowledge.db` needs a `public` column instead of an ingest skip —
-  a materially different implementation. Decide before writing the gate.
+- ~~Does MAESTER's local usage want the full 190-page tagged set while the public package
+  gets the ~75-page allowlist?~~ **Resolved 2026-07-29 — yes.** MAESTER keeps the full set;
+  the gate is a publish-time prune against a `public` column, not an ingest-time skip. See
+  *Where the gate sits* under Decision.
+- Where does the entity allowlist live — a checked-in list in the repo, or `public: true`
+  stamped in the vault's own frontmatter? The repo version is auditable in git and reviewable
+  in a PR; the vault version keeps the decision next to the content. Leaning repo, because
+  the publish decision belongs to the thing that publishes.
