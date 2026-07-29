@@ -291,11 +291,18 @@ function reclassifyExisting(): void {
   console.error("=== Reclassify publication gate (no embedding) ===\n");
 
   const db = initKnowledgeDb();
+  // WHY: `public` is selected up front rather than re-queried per row — a
+  //       prepared statement inside the loop was an avoidable N+1 read.
   const rows = db
     .prepare(
-      "SELECT url, title, content_type FROM articles WHERE source_origin = 'secondbrain'"
+      "SELECT url, title, content_type, public FROM articles WHERE source_origin = 'secondbrain'"
     )
-    .all() as Array<{ url: string; title: string; content_type: string }>;
+    .all() as Array<{
+    url: string;
+    title: string;
+    content_type: string;
+    public: number;
+  }>;
 
   const update = db.prepare("UPDATE articles SET public = ? WHERE url = ?");
   let toPublic = 0;
@@ -305,20 +312,22 @@ function reclassifyExisting(): void {
   const apply = db.transaction(() => {
     for (const row of rows) {
       const want = isPublic(row.content_type, "secondbrain", row.title) ? 1 : 0;
-      const current = (
-        db.prepare("SELECT public FROM articles WHERE url = ?").get(row.url) as {
-          public: number;
+      if (want !== row.public) {
+        changed++;
+        // WHY: Name every gate flip, in both modes. Concepts publish by denylist
+        //      default (see public-allowlist.ts), so a newly written concept
+        //      going public is exactly the event nobody would otherwise notice —
+        //      and prepublishOnly runs this immediately before the prune, so
+        //      these lines print at publish time.
+        console.error(
+          `    ${want === 1 ? "→ PUBLIC  " : "→ withheld"} [${row.content_type}] ${row.title.slice(0, 58)}`
+        );
+        if (!FLAGS.dryRun) {
+          // WHY: Write only on change. An unconditional UPDATE dirtied every
+          //      secondbrain row on each run, which makes a no-op reclassify
+          //      indistinguishable from a real one in the DB's page churn.
+          update.run(want, row.url);
         }
-      ).public;
-      if (want !== current) changed++;
-      if (FLAGS.dryRun) {
-        if (want !== current) {
-          console.error(
-            `    Would set public=${want}: [${row.content_type}] ${row.title.slice(0, 58)}`
-          );
-        }
-      } else {
-        update.run(want, row.url);
       }
       if (want === 1) toPublic++;
       else toWithheld++;

@@ -12,9 +12,24 @@
  *       docs/adr/0001-knowledge-db-keeps-its-own-index.md and
  *       docs/entity-allowlist.md.
  *
- * Fail-closed: `isPublic()` returns false for anything it does not positively
- * recognize. A new content_type, a new source_origin, or a new wiki entity is
- * withheld until someone adds it here deliberately.
+ * Fail-closed everywhere EXCEPT wiki concepts. `isPublic()` returns false for an
+ * unrecognized content_type, an unrecognized source_origin, and any wiki entity
+ * not named in ENTITY_ALLOWLIST. Concepts are the deliberate exception: they are
+ * governed by a *denylist*, so a newly written concept page publishes unless
+ * someone adds it to CONCEPT_DENYLIST first.
+ *
+ * That asymmetry is James's decision of 2026-07-29 ("ship the concepts,
+ * allowlist the entities") and it is a real trade-off, stated here rather than
+ * papered over: concepts are portable original thinking and allowlisting each
+ * one is friction that would discourage writing them; entities are where the
+ * generic stubs and private ventures live. The residual risk is that the
+ * approved audit covered the 74 concepts that existed on 2026-07-29 — a concept
+ * written later has never been reviewed and ships by default.
+ *
+ * The mitigation is visibility, not enforcement: `reclassify-wiki` names every
+ * page whose gate flips, and `prepublishOnly` runs it immediately before the
+ * prune, so a newly-public concept is printed at publish time. If that proves
+ * too weak, switch concepts to an allowlist — the shape is already here.
  */
 
 // WHAT: astgl-site content types that represent published newsletter output.

@@ -36,7 +36,7 @@
     "dashboard-data": "tsx src/dashboard.ts",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "prepublishOnly": "npm run build && npm run build-public-db"
+    "prepublishOnly": "npm run build && npm run reclassify-wiki && npm run build-public-db"
   },
   "repository": {
     "type": "git",

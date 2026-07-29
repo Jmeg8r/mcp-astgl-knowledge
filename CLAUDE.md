@@ -346,9 +346,13 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
   embeddings** — sqlite-vec has no cascading delete, so withheld vectors could otherwise stay
   searchable). Never mutates the source. `--dry-run` supported.
 - **`npm run reclassify-wiki`** — re-derives `public` for already-indexed rows without
-  re-embedding. **Run this after editing the allowlist**; sync is mtime-incremental, so an
-  unchanged page is never re-processed and the allowlist edit would otherwise change nothing.
-- **`prepublishOnly`** runs the prune, so a publish cannot skip the gate.
+  re-embedding. Sync is mtime-incremental, so an unchanged page is never re-processed and an
+  allowlist edit would otherwise change nothing. Available to run by hand, but you do not
+  have to remember to: it is wired into `prepublishOnly`.
+- **`prepublishOnly`** runs build → **reclassify** → prune, in that order, so a publish can
+  neither skip the gate nor ship flags that predate the current allowlist. Do not reorder or
+  drop the reclassify step — without it, editing `public-allowlist.ts` and publishing would
+  ship stale `public = 1` rows.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.

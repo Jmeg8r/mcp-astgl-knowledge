@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { Chunk, QaPair, StructuredArticle, Idea, IdeaFilters } from "./types.js";
 import { EMBEDDING_DIM } from "./types.js";
+import { PUBLISHED_SITE_TYPES } from "./public-allowlist.js";
 
 const DB_PATH = join(import.meta.dirname, "..", "data", "knowledge.db");
 
@@ -70,13 +71,19 @@ function runMigrations(database: InstanceType<typeof Database>): void {
       //       unpublished drafts that inherit source_origin 'astgl-site' from the
       //       column default, so origin alone cannot separate them.
       if (sql.includes("ADD COLUMN public")) {
+        // WHY: Types come from PUBLISHED_SITE_TYPES rather than a literal list.
+        //      A hand-copied `IN (...)` here would be a second definition of
+        //      "published" that silently diverges the first time the allowlist
+        //      changes (Mistake #8) — the exact drift public-allowlist.ts exists
+        //      to prevent.
+        const types = [...PUBLISHED_SITE_TYPES];
         database
           .prepare(
             `UPDATE articles SET public = 1
              WHERE source_origin = 'astgl-site'
-               AND content_type IN ('article','tutorial','guide','comparison','newsletter','project','faq')`
+               AND content_type IN (${types.map(() => "?").join(",")})`
           )
-          .run();
+          .run(...types);
       }
     } catch {
       // Column already exists — expected after first run

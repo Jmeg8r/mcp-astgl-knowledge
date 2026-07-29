@@ -11,11 +11,12 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { searchArticles } from "./search.js";
 
-// WHY: Resolved via db-path.ts so an installed package (which ships only the
-//       pruned build/knowledge-public.db) finds a database instead of throwing.
-const DB_PATH = resolveKnowledgeDbPath();
-
 function openReadonly(): InstanceType<typeof Database> {
+  // WHY: Resolved per call, not at module load. db-path.ts deliberately re-checks
+  //      each time so a build that produces the pruned artifact mid-process is
+  //      picked up; caching the choice here would freeze a stale path and make
+  //      export fail against a database that exists.
+  const DB_PATH = resolveKnowledgeDbPath();
   if (!existsSync(DB_PATH)) {
     throw new Error(
       `Knowledge database not found at ${describeSearchedPaths()}. Run 'npm run ingest' first.`
