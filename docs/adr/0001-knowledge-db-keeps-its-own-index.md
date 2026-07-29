@@ -60,8 +60,11 @@ an index means re-embedding one side entirely. qmd's surface (`query`, `search`,
 `get`) returns documents, never vectors, so there is nothing to lift out even if the models
 matched.
 
-**3. The private/public boundary must stay at ingest.** 190 of 1,381 wiki pages carry the
-`astgl` tag; last night's run skipped 1,171 as untagged. qmd indexes all 2,399 SecondBrain
+**3. The private/public boundary must stay at ingest.** As the 2026-07-29 00:30 sync run saw
+the vault, **190 of 1,361 pages** carry the `astgl` tag — 2 synced plus 188 unchanged on the
+tagged side, 1,171 skipped as untagged. (Read those four numbers only against each other: the
+vault grows daily, and a live `ls` later the same morning counted 1,391 files. Any total here
+is a timestamp, not a constant.) qmd indexes all 2,399 SecondBrain
 files and exposes no frontmatter filter in its query API. Querying qmd would move the
 boundary from build-time filtering to query-time filtering — putting a public MCP server
 one missing parameter away from answering out of the private vault. Build-time filtering
@@ -113,7 +116,9 @@ no standing in.
   Ship by explicit allowlist only; `Claude Code`, `Anthropic API`, `Qwen3-Coder 30B`,
   `Mac Studio`, and `Apple Silicon` earn their place, `Vite` and `Income Investor` do not.
 
-Net: roughly **70–80 pages of the strongest material** instead of 190 pages of mixed signal.
+Net, once the allowlist was actually drafted and approved: **100 pages** — 68 concepts (74
+less the 6 internal-jargon pages) plus 32 allowlisted entities — instead of 190 pages of
+mixed signal. See `docs/entity-allowlist.md` for the per-entity buckets.
 
 **Why a second gate is required.** The `astgl` tag is doing two incompatible jobs. Inside
 the vault it means "relates to my newsletter's subject area," which is why `Vite` and
@@ -121,11 +126,20 @@ the vault it means "relates to my newsletter's subject area," which is why `Vite
 publish this." An organizing label is applied generously; a disclosure gate must fail
 closed. One field cannot be both.
 
-**Where the gate sits: publish time, not ingest time (decided 2026-07-29).** MAESTER and
+> [!WARNING]
+> **Everything in this subsection is DESIGN, NOT IMPLEMENTATION — none of it is built or
+> enforced as of 2026-07-29.** There is currently no `public` column, no publish-time
+> filtering, and no pruned build artifact. **The live release path still ships
+> `data/knowledge.db` verbatim**, so any release cut today publishes every synced wiki page
+> regardless of the allowlist. Do not treat the fail-closed gate as protection that exists.
+> Tracking: implementation is deliberately out of scope for this PR and gated on approval
+> per the operating manual.
+
+**Where the gate will sit: publish time, not ingest time (decided 2026-07-29).** MAESTER and
 local use keep the full 190-page tagged set, so the gate cannot be a `sync-wiki.ts` skip —
-that would strip content the local consumer wants. Instead `articles` gains a `public`
-column (default `0`, fail-closed), `sync-wiki.ts` sets it from the concept/entity rule plus
-an allowlist, and the working `knowledge.db` continues to hold everything.
+that would strip content the local consumer wants. Instead `articles` will gain a `public`
+column (default `0`, fail-closed), `sync-wiki.ts` will set it from the concept/entity rule
+plus an allowlist, and the working `knowledge.db` continues to hold everything.
 
 **The load-bearing distinction: prune the artifact, do not filter the query.** "Publish-time
 filter" means a build step that emits a *pruned copy* of the database for the tarball.
@@ -134,13 +148,19 @@ costume of a fix: the private rows would still ship inside the published package
 query or one `better-sqlite3` open away from anyone who downloaded it. The gate is only
 real if the excluded rows are absent from the shipped file. Accordingly:
 
-- `npm run build-public-db` copies `data/knowledge.db` to a build path, deletes rows where
-  `public = 0` — routed through `deleteArticle()` so `vec_chunks` is cleaned transactionally
-  (Mistake #4) — `VACUUM`s, and asserts a non-zero remaining count.
-- `package.json` `files` points at the pruned artifact, never at `data/knowledge.db`.
-- The publish path fails loudly if the pruned DB is missing or older than the working DB —
-  a stale artifact must not ship silently, which is the exact failure this ADR exists to
-  prevent.
+Planned mechanisms, none of which exist yet:
+
+- `npm run build-public-db` (to be written) copies `data/knowledge.db` to a build path,
+  deletes rows where `public = 0` — routed through `deleteArticle()` so `vec_chunks` is
+  cleaned transactionally (Mistake #4) — `VACUUM`s, and asserts a non-zero remaining count.
+- `package.json` `files` is to be repointed at the pruned artifact. **It currently points at
+  `data/knowledge.db`.**
+- The publish path is to fail loudly if the pruned DB is missing or older than the working
+  DB — a stale artifact must not ship silently, which is the exact failure this ADR exists
+  to prevent.
+
+Until all three land, the only real control is manual: **do not cut a release from this
+branch's state.**
 
 ### What the investigation found instead
 
