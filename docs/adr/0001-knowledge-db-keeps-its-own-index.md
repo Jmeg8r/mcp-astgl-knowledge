@@ -71,6 +71,58 @@ fails closed; query-time filtering fails open.
 `rewrite_jobs`, freshness state, and related-article links. It is a publishing database
 that happens to contain vectors. qmd cannot hold any of that.
 
+### Scope of what ships (resolved 2026-07-29)
+
+The follow-on question — *should the published package carry the wiki subset at all?* — was
+answered by auditing all 931 wiki chunks rather than reasoning about them. Neither
+all-or-nothing option is right: **ship the concepts, allowlist the entities.**
+
+**Privacy audit — essentially clean.** Zero credentials or connection strings
+(`://user:pw@` matched 0 chunks), zero webhook or bot-token URLs, zero UF Health / day-job
+content, zero private IPs, no email addresses. The eight `sk-`/`ghp_`/`AKIA` pattern hits
+are all false positives — slugs such as `task-group-cancellation`, plus one page that
+*describes* secret-detection regexes as teaching material.
+
+Four items would nonetheless go public that should not:
+
+| Page | Exposure |
+|---|---|
+| `Income Investor` | Unlaunched product, its stack, and that monetization is "gated on a Florida securities-attorney review" — business-legal status and state of residence |
+| `astgl-gtm` | Existence and local path of a private go-to-market workspace |
+| `OpenClaw` | James's own pre-hardening security posture (plaintext credentials in `.bak` files, `bypassPermissions` on the main agent, auto-loaded plugins) |
+| `Autonomous Commerce Agent (ACA)` | `/Users/jamescruce/…` — macOS username embedded in a shipped artifact |
+
+None is catastrophic; OpenClaw is retired and reads as a before/after case study. But these
+are facts that should be *disclosed by choice*, not published by tag.
+
+**Usefulness audit — this is the binding constraint.** Of 190 pages, roughly 40 are generic
+tool stubs (Git, React, Next.js, Vite, Xcode, Swift, Sparkle, Homebrew, Blender, CapCut)
+and roughly 45 are personal-project internals meaningless to outsiders (`/brain-capture`,
+`CURATOR`, `quorum`, `factcheck-db`, `revri`, `trevin-creator`). For an AEO/citation server
+that is worse than neutral: a stub answer invites a citation to content carrying no ASTGL
+authority, teaching downstream assistants that this server returns filler on topics it has
+no standing in.
+
+**The cut.** The `concept` / `entity` split is very nearly the right line already:
+
+- **74 concepts** — `Cost-Chokepoint Pattern`, `Three-Layer Defense`, `Hard-fail over
+  silent degradation`, `Loop Engineering`, `Free Tier as Marketing Channel`. Portable,
+  distinctive, original. Ship these, less ~6 pages of internal jargon (`editorial glow`,
+  `learnings-jsonl`, `Substack safe zone`).
+- **116 entities** — where all four privacy exceptions and nearly every generic stub live.
+  Ship by explicit allowlist only; `Claude Code`, `Anthropic API`, `Qwen3-Coder 30B`,
+  `Mac Studio`, and `Apple Silicon` earn their place, `Vite` and `Income Investor` do not.
+
+Net: roughly **70–80 pages of the strongest material** instead of 190 pages of mixed signal.
+
+**Why a second gate is required.** The `astgl` tag is doing two incompatible jobs. Inside
+the vault it means "relates to my newsletter's subject area," which is why `Vite` and
+`Income Investor` both carry it; for a public index it would need to mean "I chose to
+publish this." An organizing label is applied generously; a disclosure gate must fail
+closed. One field cannot be both. The mechanism is a `public: true` frontmatter field
+checked in `sync-wiki.ts` alongside the tag, defaulting closed — enforced, not
+conventional, in the same spirit as the vault's `raw/` immutability hook.
+
 ### What the investigation found instead
 
 The duplication is real but cheap: a median night re-embeds 3 pages and ~15 chunks on a
@@ -93,9 +145,18 @@ that does not cross the boundary it is meant to police reports motion, not diver
   indexes is a defensible design choice, and the paper now says so.
 - Roadmap item #2 is replaced by **"close the publish gap"**: cut a release, then
   instrument the local-vs-published delta so it cannot go unread again.
-- **A release is now a content-review event, not a version bump.** The `astgl` tag is the
-  only boundary between a private vault and a public npm tarball, and shipping would make
-  931 wiki chunks public for the first time. The tagged set gets read before it ships.
+- **A release is a content-review event, not a version bump** — but the review is now
+  front-loaded into the `public: true` gate rather than repeated per release. The `astgl`
+  tag alone is not a sufficient boundary between a private vault and a public npm tarball
+  (see *Scope of what ships*); the allowlist **is** the review, and it is auditable in git.
+- `sync-wiki.ts` gains a second filter and a counter
+  (`pages_skipped_not_public`) in its stdout summary, so the gap between tagged and
+  published is a number rather than an assumption.
+- Pages already indexed that fail the new gate must be **retired**, not merely skipped —
+  the existing orphan sweep handles this correctly, since a page dropped from the eligible
+  set leaves `seenUrls` and is deleted via `deleteArticle()`. Verify this on a DB copy
+  before the first live run; a gate change that silently strips ~110 articles is exactly
+  the shape of Mistake #2.
 - Two sync holes remain open, both of which can silently stale the data:
   - `sync-wiki.ts` detects change by **mtime only**. A content edit that preserves mtime
     (rsync, git checkout, some Obsidian sync paths) is skipped permanently. Content-hashing
@@ -132,9 +193,13 @@ sixth place to look.
 
 ## Open questions
 
-- Should the published package ship the wiki subset at all, or should the public corpus be
-  articles-only with the wiki reserved for MAESTER and local use? This is a content
-  decision, not an architecture one, and it gates the release above.
+- ~~Should the published package ship the wiki subset at all, or should the public corpus
+  be articles-only?~~ **Resolved 2026-07-29** — neither; ship concepts, allowlist entities,
+  behind a `public: true` gate. See *Scope of what ships* under Decision.
 - What is the right republish cadence once the gap is closed — every wiki-sync, weekly, or
   on article publish? The instrument should be built first; the cadence follows from what
   it shows.
+- Does MAESTER's local usage want the full 190-page tagged set while the public package
+  gets the ~75-page allowlist? If so the gate is a *publish-time* filter rather than a
+  sync-time one, and `knowledge.db` needs a `public` column instead of an ingest skip —
+  a materially different implementation. Decide before writing the gate.
