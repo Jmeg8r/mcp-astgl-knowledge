@@ -10,10 +10,20 @@
  *   1. Stale content — articles older than 90 days (pub_date or processed_at)
  *   2. MCP SDK version — polls npm registry for @modelcontextprotocol/sdk updates
  *   3. Key tool releases — polls GitHub releases for Ollama, MCP servers, Open WebUI
+ *   4. Publish gap — compares local publishable content against what this package
+ *      actually serves on npm (see publish-drift.ts, ADR-0001)
+ *
+ * Checks 1–3 watch the ECOSYSTEM for staleness; check 4 watches THIS package. They
+ * share a script because they share the cooldown table and the Discord delivery
+ * path, and because "what we serve is out of date" is one question whether the
+ * staleness is in the articles or in the tarball.
  *
  * Usage:
- *   npm run freshness                    Check all, print to stdout (JSON)
- *   npm run freshness -- --discord       Also send triggered alerts to Discord
+ *   npm run freshness                       Check all, print to stdout (JSON)
+ *   npm run freshness -- --discord          Also send triggered alerts to Discord
+ *   npm run freshness -- --only publish_gap Run a subset of checks
+ *   npm run publish-drift                   Shorthand for --only publish_gap
+ *   npm run freshness -- --skip-tarball     Skip the 4.7 MB registry tarball download
  *
  * Env: DISCORD_WEBHOOK_URL — Discord webhook for alert delivery
  */
@@ -21,7 +31,14 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
-import { initKnowledgeDb, getStaleArticles } from "./knowledge-db.js";
+import {
+  initKnowledgeDb,
+  getStaleArticles,
+  getSnapshot,
+  upsertSnapshot,
+} from "./knowledge-db.js";
+import { runPublishGapCheck, publishGapAlertKey } from "./publish-drift.js";
+import type { PublishDrift } from "./publish-drift.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const KNOWLEDGE_PATH = join(DATA_DIR, "knowledge.db");
@@ -43,9 +60,26 @@ const TRACKED_GITHUB_REPOS = [
   { owner: "open-webui", repo: "open-webui", label: "Open WebUI" },
 ];
 
+// WHAT: Every check this script knows how to run, in execution order.
+// WHY:  Named so `--only` can select a subset and the summary can report which
+//       checks actually ran. A check that was skipped must never look like a check
+//       that ran and found nothing.
+const ALL_CHECKS = [
+  "stale_content",
+  "npm_version_check",
+  "github_release_check",
+  "publish_gap",
+] as const;
+
+type CheckName = (typeof ALL_CHECKS)[number];
+
 // --- Types ---
 interface Alert {
-  type: "stale_content" | "npm_version_change" | "github_release_change";
+  type:
+    | "stale_content"
+    | "npm_version_change"
+    | "github_release_change"
+    | "publish_gap";
   severity: "info" | "warning" | "critical";
   title: string;
   details: string;
@@ -57,9 +91,11 @@ interface FreshnessReport {
   alerts_fired: Alert[];
   alerts_suppressed: number;
   checks_run: string[];
+  checks_skipped: string[];
   ecosystem_versions: Array<{ package: string; version: string; type: string }>;
-  stale_articles: number;
-  total_articles: number;
+  stale_articles: number | null;
+  total_articles: number | null;
+  publish_drift: PublishDrift | null;
 }
 
 // --- Alert History DB ---
@@ -117,69 +153,13 @@ function recordAlert(
 }
 
 // --- Ecosystem Snapshots ---
-// WHAT: Store last-known version for each tracked package/repo
-// WHY: Comparing against previous version detects ecosystem changes
-function initEcosystemTable(knowledgeDb: InstanceType<typeof Database>): void {
-  knowledgeDb.exec(`
-    CREATE TABLE IF NOT EXISTS ecosystem_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      check_type TEXT NOT NULL,
-      package_name TEXT NOT NULL,
-      current_version TEXT NOT NULL,
-      previous_version TEXT,
-      checked_at TEXT NOT NULL,
-      UNIQUE(check_type, package_name)
-    )
-  `);
-}
-
-function getSnapshot(
-  knowledgeDb: InstanceType<typeof Database>,
-  checkType: string,
-  packageName: string
-): { current_version: string; previous_version: string | null } | undefined {
-  return knowledgeDb
-    .prepare(
-      "SELECT current_version, previous_version FROM ecosystem_snapshots WHERE check_type = ? AND package_name = ?"
-    )
-    .get(checkType, packageName) as
-    | { current_version: string; previous_version: string | null }
-    | undefined;
-}
-
-function upsertSnapshot(
-  knowledgeDb: InstanceType<typeof Database>,
-  checkType: string,
-  packageName: string,
-  version: string
-): void {
-  const existing = getSnapshot(knowledgeDb, checkType, packageName);
-
-  if (existing) {
-    if (existing.current_version !== version) {
-      knowledgeDb
-        .prepare(
-          `UPDATE ecosystem_snapshots
-           SET previous_version = current_version, current_version = ?, checked_at = ?
-           WHERE check_type = ? AND package_name = ?`
-        )
-        .run(version, new Date().toISOString(), checkType, packageName);
-    } else {
-      knowledgeDb
-        .prepare(
-          "UPDATE ecosystem_snapshots SET checked_at = ? WHERE check_type = ? AND package_name = ?"
-        )
-        .run(new Date().toISOString(), checkType, packageName);
-    }
-  } else {
-    knowledgeDb
-      .prepare(
-        `INSERT INTO ecosystem_snapshots (check_type, package_name, current_version, checked_at)
-         VALUES (?, ?, ?, ?)`
-      )
-      .run(checkType, packageName, version, new Date().toISOString());
-  }
-}
+// WHAT: getSnapshot/upsertSnapshot now live in knowledge-db.ts.
+// WHY:  This module used to carry its own CREATE TABLE for ecosystem_snapshots
+//       alongside the one in runMigrations(), plus private copies of both helpers.
+//       `CREATE TABLE IF NOT EXISTS` never errors, so the two definitions could
+//       drift silently (Mistake #8) — and publish-drift.ts needs the same helpers,
+//       which would have made three copies. The table is declared once in
+//       runMigrations(); the accessors are imported above.
 
 // --- Backfill pub_date from discovery.db ---
 // WHAT: Copy pub_date from discovered_content into articles table
@@ -537,15 +517,66 @@ async function sendAlertsToDiscord(alerts: Alert[]): Promise<void> {
 }
 
 // --- CLI ---
-function parseArgs(): { sendToDiscord: boolean } {
+interface Flags {
+  sendToDiscord: boolean;
+  checks: Set<CheckName>;
+  skipTarball: boolean;
+}
+
+// WHAT: Hand-rolled argv scan, matching the convention in every other script here.
+// WHY:  `--only` takes a comma-separated list of check names. An unrecognised name
+//       is a hard error rather than a silent no-op: a typo'd filter that quietly
+//       runs zero checks and reports "0 alerts" is the false all-clear this repo
+//       has been bitten by before.
+function parseArgs(): Flags {
   const args = process.argv.slice(2);
-  return { sendToDiscord: args.includes("--discord") };
+
+  const onlyIdx = args.indexOf("--only");
+  let checks = new Set<CheckName>(ALL_CHECKS);
+
+  if (onlyIdx >= 0) {
+    const raw = args[onlyIdx + 1];
+    if (!raw || raw.startsWith("--")) {
+      console.error(`--only requires a check name. Valid: ${ALL_CHECKS.join(", ")}`);
+      process.exit(1);
+    }
+    const requested = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    // WHY: `--only ,` or `--only " "` reduces to an empty list, which then passes
+    //      the unknown-name check vacuously and runs ZERO checks while exiting 0 —
+    //      the silent no-op this validation exists to prevent, arrived at from the
+    //      other direction.
+    if (requested.length === 0) {
+      console.error(
+        `--only requires at least one check name. Valid: ${ALL_CHECKS.join(", ")}`
+      );
+      process.exit(1);
+    }
+    const unknown = requested.filter(
+      (name) => !(ALL_CHECKS as readonly string[]).includes(name)
+    );
+    if (unknown.length > 0) {
+      console.error(
+        `Unknown check(s): ${unknown.join(", ")}. Valid: ${ALL_CHECKS.join(", ")}`
+      );
+      process.exit(1);
+    }
+    checks = new Set(requested as CheckName[]);
+  }
+
+  return {
+    sendToDiscord: args.includes("--discord"),
+    checks,
+    skipTarball: args.includes("--skip-tarball"),
+  };
 }
 
 async function main() {
-  const { sendToDiscord } = parseArgs();
+  const { sendToDiscord, checks, skipTarball } = parseArgs();
 
   console.error("=== ASTGL Content Freshness Checker ===\n");
+  if (checks.size !== ALL_CHECKS.length) {
+    console.error(`  [--only ${[...checks].join(",")}]\n`);
+  }
 
   if (!existsSync(KNOWLEDGE_PATH)) {
     console.error("knowledge.db not found. Run 'npm run ingest' first.");
@@ -556,9 +587,6 @@ async function main() {
   // WHY: The new columns won't exist until migrations run
   const knowledgeDb = initKnowledgeDb();
   const alertDb = initAlertDb();
-
-  // Ensure ecosystem_snapshots table exists (also created by migration, but safe to re-run)
-  initEcosystemTable(knowledgeDb);
 
   // Backfill pub_date from discovery.db (idempotent)
   console.error("Backfilling pub_date from discovery.db...");
@@ -573,50 +601,105 @@ async function main() {
   const allAlerts: Alert[] = [];
   const ecosystemVersions: FreshnessReport["ecosystem_versions"] = [];
 
+  // WHAT: null, not 0, when the check did not run.
+  // WHY:  "0 stale articles" and "we never looked" are different facts. Reporting
+  //       the second as the first is how a skipped check reads as a clean bill.
+  let staleCount: number | null = null;
+  let totalCount: number | null = null;
+  let publishDrift: PublishDrift | null = null;
+
   // Check #1: Stale content
-  console.error("Checking: stale content (90+ days)...");
-  checksRun.push("stale_content");
-  const { alerts: staleAlerts, staleCount, totalCount } = checkStaleContent(
-    knowledgeDb,
-    alertDb
-  );
-  allAlerts.push(...staleAlerts);
-  console.error(`  ${staleCount} of ${totalCount} articles are stale\n`);
+  if (checks.has("stale_content")) {
+    console.error("Checking: stale content (90+ days)...");
+    checksRun.push("stale_content");
+    const result = checkStaleContent(knowledgeDb, alertDb);
+    allAlerts.push(...result.alerts);
+    staleCount = result.staleCount;
+    totalCount = result.totalCount;
+    console.error(`  ${staleCount} of ${totalCount} articles are stale\n`);
+  }
 
   // Check #2: npm version changes
-  console.error("Checking: npm package versions...");
-  checksRun.push("npm_version_check");
-  const npmAlerts = await checkNpmVersions(knowledgeDb, alertDb);
-  allAlerts.push(...npmAlerts);
-  console.error(`  ${npmAlerts.length} version change(s) detected\n`);
+  if (checks.has("npm_version_check")) {
+    console.error("Checking: npm package versions...");
+    checksRun.push("npm_version_check");
+    const npmAlerts = await checkNpmVersions(knowledgeDb, alertDb);
+    allAlerts.push(...npmAlerts);
+    console.error(`  ${npmAlerts.length} version change(s) detected\n`);
 
-  // Collect ecosystem versions for report
-  for (const pkg of TRACKED_NPM_PACKAGES) {
-    const snap = getSnapshot(knowledgeDb, "npm_version", pkg);
-    if (snap) {
-      ecosystemVersions.push({
-        package: pkg,
-        version: snap.current_version,
-        type: "npm",
-      });
+    // Collect ecosystem versions for report
+    for (const pkg of TRACKED_NPM_PACKAGES) {
+      const snap = getSnapshot(knowledgeDb, "npm_version", pkg);
+      if (snap) {
+        ecosystemVersions.push({
+          package: pkg,
+          version: snap.current_version,
+          type: "npm",
+        });
+      }
     }
   }
 
   // Check #3: GitHub release changes
-  console.error("Checking: GitHub releases...");
-  checksRun.push("github_release_check");
-  const ghAlerts = await checkGitHubReleases(knowledgeDb, alertDb);
-  allAlerts.push(...ghAlerts);
-  console.error(`  ${ghAlerts.length} release change(s) detected\n`);
+  if (checks.has("github_release_check")) {
+    console.error("Checking: GitHub releases...");
+    checksRun.push("github_release_check");
+    const ghAlerts = await checkGitHubReleases(knowledgeDb, alertDb);
+    allAlerts.push(...ghAlerts);
+    console.error(`  ${ghAlerts.length} release change(s) detected\n`);
 
-  // Collect GitHub versions for report
-  for (const { owner, repo, label } of TRACKED_GITHUB_REPOS) {
-    const snap = getSnapshot(knowledgeDb, "github_release", `${owner}/${repo}`);
-    if (snap) {
+    // Collect GitHub versions for report
+    for (const { owner, repo, label } of TRACKED_GITHUB_REPOS) {
+      const snap = getSnapshot(knowledgeDb, "github_release", `${owner}/${repo}`);
+      if (snap) {
+        ecosystemVersions.push({
+          package: label,
+          version: snap.current_version,
+          type: "github",
+        });
+      }
+    }
+  }
+
+  // Check #4: Publish gap — local publishable content vs what npm actually serves
+  if (checks.has("publish_gap")) {
+    console.error("Checking: publish gap (local vs npm registry)...");
+    checksRun.push("publish_gap");
+    const { drift, alert } = await runPublishGapCheck(knowledgeDb, { skipTarball });
+    publishDrift = drift;
+
+    if (drift.content_measured) {
+      console.error(
+        `  local ${drift.local_public_articles} publishable vs published ${drift.published_articles}` +
+          ` (${drift.published_version}, ${drift.days_since_last_publish}d ago)` +
+          ` → delta ${drift.articles_delta}` +
+          (drift.measurement_from_cache ? " [cached]" : "")
+      );
+    } else {
+      console.error(`  NOT MEASURED — ${drift.unmeasured_reason}`);
+    }
+
+    // WHY: Cooldown is applied here rather than inside publish-drift.ts so the
+    //      suppression rules stay in one place across all four checks.
+    if (alert) {
+      const key = publishGapAlertKey(drift);
+      if (wasRecentlyFired(alertDb, "publish_gap", key)) {
+        console.error(`  alert suppressed by cooldown (${key})\n`);
+      } else {
+        recordAlert(alertDb, alert, key);
+        allAlerts.push(alert);
+        console.error(`  alert fired: ${alert.severity}\n`);
+      }
+    } else {
+      console.error("  no publish gap\n");
+    }
+
+    // Surface the published version alongside the ecosystem readings.
+    if (drift.published_version) {
       ecosystemVersions.push({
-        package: label,
-        version: snap.current_version,
-        type: "github",
+        package: drift.package,
+        version: drift.published_version,
+        type: "npm-self",
       });
     }
   }
@@ -629,9 +712,11 @@ async function main() {
     alerts_fired: allAlerts,
     alerts_suppressed: 0,
     checks_run: checksRun,
+    checks_skipped: ALL_CHECKS.filter((c) => !checks.has(c)),
     ecosystem_versions: ecosystemVersions,
     stale_articles: staleCount,
     total_articles: totalCount,
+    publish_drift: publishDrift,
   };
 
   console.log(JSON.stringify(report, null, 2));
