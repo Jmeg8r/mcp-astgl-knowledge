@@ -379,8 +379,8 @@ SECOND artifact that can ship content, so it goes through the same publication g
 → **PLATFORM: a bundle is only valid on the platform that built it.** `better-sqlite3`
 compiles a native `.node` per platform and Node ABI; `sqlite-vec` resolves its binary through
 per-platform `optionalDependencies`. Multi-platform bundles come from
-`.github/workflows/build-mcpb.yml`, which runs this script on macos-14 (arm64), macos-13
-(x64), ubuntu-latest, and windows-latest.
+`.github/workflows/build-mcpb.yml`, which runs this script on macos-15 (arm64),
+macos-15-intel (x64), ubuntu-latest, and windows-latest.
 
 ### The CI matrix and why it sources from npm
 
