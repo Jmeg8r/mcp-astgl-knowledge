@@ -34,7 +34,7 @@ import {
   readFileSync,
   statSync,
 } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { createHash } from "crypto";
 import Database from "better-sqlite3";
 
@@ -52,10 +52,26 @@ const MANIFEST = join(ROOT, "mcpb", "manifest.json");
 const NPM_CI_TIMEOUT_MS = 300_000;
 const PACK_TIMEOUT_MS = 300_000;
 
-// WHAT: Pinned packer version.
-// WHY:  The bundle format is versioned; letting npx float to @latest would let
-//       the artifact's structure change without a commit here saying so.
-const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
+// WHAT: Path to the packer's CLI entry point, resolved from node_modules.
+// WHY:  It is a pinned devDependency, invoked directly with node rather than
+//       fetched at build time. Three reasons, in order of how much they cost:
+//       (1) `npm exec --yes -- @anthropic-ai/mcpb pack` HUNG for 60 minutes on
+//           the darwin-arm64 runner of run 30538480425 — npm ci had finished in
+//           27s, then nothing, and the job log ended with two orphaned node
+//           processes holding stdio open so the promise never settled;
+//       (2) it removes a network fetch from the middle of a build; and
+//       (3) it sidesteps the .cmd shim on Windows entirely.
+//       The version stays pinned in package.json, so the artifact's structure
+//       cannot change without a lockfile diff.
+const MCPB_CLI_JS = join(
+  ROOT,
+  "node_modules",
+  "@anthropic-ai",
+  "mcpb",
+  "dist",
+  "cli",
+  "cli.js"
+);
 
 // --- npm invocation ---
 
@@ -250,9 +266,17 @@ async function main(): Promise<void> {
     });
     const tgz = join(STAGE, `mcp-astgl-knowledge-${FLAGS.fromNpm}.tgz`);
     if (!existsSync(tgz)) fail(`npm pack produced no tarball for ${FLAGS.fromNpm}`);
-    // --strip-components=1 unwraps the tarball's "package/" prefix so the stage
-    // layout matches a local build exactly.
-    await EXEC_FILE_ASYNC(TAR, ["-xzf", tgz, "-C", STAGE, "--strip-components=1"], {
+    // WHAT: Extract using a RELATIVE filename, with the stage as cwd.
+    // WHY:  An absolute Windows path breaks here. GitHub's windows runners put
+    //       Git-for-Windows' GNU tar ahead of Windows' own bsdtar on PATH, and GNU
+    //       tar reads `D:\path` as a remote host spec (scp-style `host:path`) —
+    //       it tried to connect to a machine called "D" and failed with
+    //       "Cannot connect to D: resolve failed". `--force-local` would fix GNU
+    //       tar but is unsupported by bsdtar, so it would break macOS instead.
+    //       Passing only a basename removes the colon, which works with both.
+    //       --strip-components=1 unwraps the tarball's "package/" prefix so the
+    //       stage layout matches a local build exactly.
+    await EXEC_FILE_ASYNC(TAR, ["-xzf", basename(tgz), "--strip-components=1"], {
       cwd: STAGE,
       timeout: PACK_TIMEOUT_MS,
     });
@@ -339,21 +363,17 @@ async function main(): Promise<void> {
   rmSync(outFile, { force: true });
 
   console.error("  Packing…");
-  // WHY: `npm exec` rather than `npx` — same reasoning as above, and it reuses
-  //       the single npmInvocation path instead of adding a second shim to dodge.
-  const packerCall = npmInvocation([
-    "exec",
-    "--yes",
-    "--",
-    MCPB_CLI,
-    "pack",
-    STAGE,
-    outFile,
-  ]);
-  const { stdout } = await EXEC_FILE_ASYNC(packerCall.cmd, packerCall.argv, {
-    cwd: ROOT,
-    timeout: PACK_TIMEOUT_MS,
-  });
+  if (!existsSync(MCPB_CLI_JS)) {
+    fail(
+      `packer not found at ${MCPB_CLI_JS} — run 'npm ci' in the repo first ` +
+        `(@anthropic-ai/mcpb is a pinned devDependency, no longer fetched at build time)`
+    );
+  }
+  const { stdout } = await EXEC_FILE_ASYNC(
+    process.execPath,
+    [MCPB_CLI_JS, "pack", STAGE, outFile],
+    { cwd: ROOT, timeout: PACK_TIMEOUT_MS }
+  );
 
   rmSync(STAGE, { recursive: true, force: true });
 
