@@ -416,8 +416,12 @@ carry content the npm package does not.
   now skips the shim entirely: npm sets `npm_execpath` to the absolute path of `npm-cli.js`
   for any script it runs, so the script invokes `node <npm-cli.js> …` — no shell, identical
   on every platform, and `shell: true` (with its quoting surface) stays off the table.
-  **Consequence: run it via `npm run build-mcpb`, not `tsx src/build-mcpb.ts` directly**, or
-  `npm_execpath` is unset; the script fails with that guidance on Windows.
+  **Consequence: run it via `npm run build-mcpb`. Direct `tsx src/build-mcpb.ts` execution is
+  unsupported on EVERY platform** — `npm_execpath` is only set for npm-run scripts, and the
+  script now fails uniformly rather than working on POSIX and breaking on win32. A fallback
+  that succeeded on three platforms and failed on the one you cannot test locally is worse
+  than no fallback. (`npx tsx …` happens to work because npx sets the variable itself, but
+  do not rely on that.)
 - Workflow injection: every `${{ }}` value reaching a `run:` block goes through `env:` and is
   referenced as a quoted shell variable, and the resolved version is semver-validated before
   it touches npm or a filename.
