@@ -392,6 +392,14 @@ pulls dist/ and the database out of the **published tarball**, already gate-veri
 Two consequences worth keeping: no private content ever reaches CI, and a bundle can never
 carry content the npm package does not.
 
+- Runner labels are **verified against actions/runner-images, not assumed** — `macos-13` was
+  retired and `macos-14` is deprecated, so the macOS legs are `macos-15` (arm64) and
+  `macos-15-intel` (x64).
+- **MCPB cannot express CPU architecture.** `compatibility.platforms` is Node platform values
+  only, so a darwin-arm64 and a darwin-x64 bundle both declare `["darwin"]` and are
+  indistinguishable to a client — architecture lives *only* in the filename. A mislabelled
+  bundle is therefore unrecoverable, which is why `build-mcpb.ts` **fails** (not warns) when
+  `--platforms` or `--label` disagrees with the build host.
 - Node is **pinned** in the workflow (`24.14.0`). better-sqlite3's binary is tied to the Node
   ABI, so a floating runner version would silently emit bundles that fail at `require()` on
   clients using the older ABI. Bump deliberately and re-verify.

@@ -39,6 +39,12 @@ on:
 permissions:
   contents: read
 
+# WHY: One bundle build per version at a time. Two concurrent runs for the same
+#      version would race on the release assets they upload.
+concurrency:
+  group: build-mcpb-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
 jobs:
   bundle:
     name: ${{ matrix.label }}
@@ -49,10 +55,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # WHY: macos-14 is deprecated and macos-13 was RETIRED — that leg could
+          #      never have scheduled (review on #35). macos-15 is arm64,
+          #      macos-15-intel is the current x64 image. Verified against
+          #      actions/runner-images, not assumed.
+          - os: macos-15
             label: darwin-arm64
             platforms: darwin
-          - os: macos-13
+          - os: macos-15-intel
             label: darwin-x64
             platforms: darwin
           - os: ubuntu-latest
@@ -63,13 +73,18 @@ jobs:
             platforms: win32
 
     steps:
-      - uses: actions/checkout@v4
+      # WHY: Pinned to a commit, and credentials are NOT persisted. This job runs
+      #      `npm ci`, which executes third-party install scripts — leaving a
+      #      checkout token on disk during that is an avoidable exposure.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # WHY: Node is pinned, not floated. better-sqlite3's compiled binary is
       #      tied to the Node ABI, so a runner silently moving to a new major
       #      would produce bundles that fail at require() time on clients running
       #      the older ABI. Bump this deliberately, and re-verify when you do.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.14.0"
 
@@ -222,7 +237,7 @@ jobs:
           JS
           node smoke.mjs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mcpb-${{ matrix.label }}
           path: |
@@ -239,7 +254,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: bundles
           merge-multiple: true
@@ -247,13 +262,25 @@ jobs:
       - name: List what will be attached
         run: ls -lh bundles/
 
-      # WHY: This action is pinned to a commit SHA rather than a moving tag. It
-      #      receives contents:write, and a tag that can be repointed by the
-      #      action's owner is a supply-chain hole at that permission level.
-      - uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.0.8
-        with:
-          tag_name: ${{ github.event.release.tag_name || format('v{0}', inputs.version) }}
-          files: |
-            bundles/*.mcpb
-            bundles/*.sha1
-          fail_on_unmatched_files: true
+      # WHY: `gh` ships on the runner, so this drops a third-party action from the
+      #      only job that holds contents:write — no pinning to maintain and no
+      #      third party in the trust path for a release-writing step.
+      - name: Upload bundles to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then TAG="$RELEASE_TAG"; else TAG="v$INPUT_VERSION"; fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::'$TAG' is not a plain release tag"; exit 1
+          fi
+          shopt -s nullglob
+          FILES=(bundles/*.mcpb bundles/*.sha1)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::no bundles to upload"; exit 1
+          fi
+          printf '  uploading: %s\n' "${FILES[@]}"
+          gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"

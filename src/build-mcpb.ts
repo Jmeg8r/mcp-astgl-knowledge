@@ -35,9 +35,10 @@ import {
   statSync,
 } from "fs";
 import { join } from "path";
+import { createHash } from "crypto";
 import Database from "better-sqlite3";
 
-const execFileAsync = promisify(execFile);
+const EXEC_FILE_ASYNC = promisify(execFile);
 
 const ROOT = join(import.meta.dirname, "..");
 const STAGE = join(ROOT, ".mcpb-stage");
@@ -64,6 +65,24 @@ const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
 //       and injection surface this script deliberately avoids.
 const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
 const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
+// WHY: tar is a real executable on every supported runner (Windows 10+ ships
+//      bsdtar as tar.exe), so no .cmd shim dance is needed — but it is named
+//      here rather than inlined, for the same reason npm and npx are.
+const TAR = "tar";
+
+// WHAT: Bytes per mebibyte, for human-readable size reporting.
+const BYTES_PER_MB = 1024 * 1024;
+
+// WHAT: The host this build is running on, as MCPB and Node describe it.
+// WHY:  MCPB v0.3 `compatibility.platforms` carries NO cpu architecture, so a
+//       darwin-arm64 bundle and a darwin-x64 bundle both declare ["darwin"] and
+//       are indistinguishable to a client. Architecture therefore lives only in
+//       the FILENAME, which makes a mislabelled artifact unrecoverable — nothing
+//       downstream can detect it. These two values let the build refuse to
+//       produce a bundle whose declared platform or label disagrees with the
+//       machine that actually compiled its native binaries.
+const HOST_PLATFORM = process.platform;
+const HOST_TRIPLE = `${process.platform}-${process.arch}`;
 
 // WHAT: Read a `--flag value` pair from argv.
 // WHY:  Matches the repo's hand-rolled argv convention — no arg-parsing dep.
@@ -144,10 +163,24 @@ async function main(): Promise<void> {
   console.error("=== Build MCPB bundle ===\n");
   if (FLAGS.dryRun) console.error("  [DRY RUN — nothing will be written]\n");
 
-  if (process.platform !== "darwin" || process.arch !== "arm64") {
-    console.error(
-      `  WARNING: building on ${process.platform}-${process.arch}. The manifest declares\n` +
-        `  platforms: ["darwin"] — update mcpb/manifest.json if that is no longer true.\n`
+  // WHY: A warning here was not enough (review on #35). Because MCPB cannot
+  //       encode architecture, a bundle mislabelled at build time is
+  //       indistinguishable from a correct one afterwards — so disagreement
+  //       between the host, the declared platform, and the filename label is
+  //       fatal rather than advisory.
+  if (FLAGS.platforms?.length) {
+    if (FLAGS.platforms.length !== 1 || FLAGS.platforms[0] !== HOST_PLATFORM) {
+      fail(
+        `--platforms ${FLAGS.platforms.join(",")} does not match the build host (${HOST_PLATFORM}). ` +
+          `A bundle may only declare the platform whose native binaries it contains.`
+      );
+    }
+  }
+  if (FLAGS.label && FLAGS.label !== HOST_TRIPLE) {
+    fail(
+      `--label ${FLAGS.label} does not match the build host (${HOST_TRIPLE}). ` +
+        `Architecture is not expressible in MCPB compatibility, so the filename is the only ` +
+        `signal a consumer has — it must be accurate.`
     );
   }
 
@@ -169,7 +202,7 @@ async function main(): Promise<void> {
 
   if (FLAGS.fromNpm) {
     console.error(`  Sourcing content from npm: mcp-astgl-knowledge@${FLAGS.fromNpm}`);
-    await execFileAsync(
+    await EXEC_FILE_ASYNC(
       NPM,
       ["pack", `mcp-astgl-knowledge@${FLAGS.fromNpm}`, "--pack-destination", STAGE],
       { cwd: STAGE, timeout: NPM_CI_TIMEOUT_MS }
@@ -178,7 +211,7 @@ async function main(): Promise<void> {
     if (!existsSync(tgz)) fail(`npm pack produced no tarball for ${FLAGS.fromNpm}`);
     // --strip-components=1 unwraps the tarball's "package/" prefix so the stage
     // layout matches a local build exactly.
-    await execFileAsync("tar", ["-xzf", tgz, "-C", STAGE, "--strip-components=1"], {
+    await EXEC_FILE_ASYNC(TAR, ["-xzf", tgz, "-C", STAGE, "--strip-components=1"], {
       cwd: STAGE,
       timeout: PACK_TIMEOUT_MS,
     });
@@ -249,7 +282,7 @@ async function main(): Promise<void> {
   // WHY: --omit=dev keeps typescript/tsx out of a distributed artifact. `npm ci`
   //      rather than `npm install` so the tree matches the committed lockfile.
   console.error("\n  Installing production dependencies into the stage…");
-  await execFileAsync(NPM, ["ci", "--omit=dev"], {
+  await EXEC_FILE_ASYNC(NPM, ["ci", "--omit=dev"], {
     cwd: STAGE,
     timeout: NPM_CI_TIMEOUT_MS,
   });
@@ -264,20 +297,36 @@ async function main(): Promise<void> {
   rmSync(outFile, { force: true });
 
   console.error("  Packing…");
-  const { stdout } = await execFileAsync(
+  const { stdout } = await EXEC_FILE_ASYNC(
     NPX,
     ["--yes", MCPB_CLI, "pack", STAGE, outFile],
     { cwd: ROOT, timeout: PACK_TIMEOUT_MS }
   );
-  const shasum = /shasum:\s*([0-9a-f]+)/.exec(stdout)?.[1] ?? "unknown";
 
   rmSync(STAGE, { recursive: true, force: true });
 
   if (!existsSync(outFile)) fail("packer reported success but no bundle exists");
   const bytes = statSync(outFile).size;
 
+  // WHAT: SHA-1 computed from the artifact on disk.
+  // WHY:  The packer does print a shasum, but parsing it made the checksum
+  //       depend on that tool's stdout format — and the previous fallback would
+  //       have written the literal string "unknown" into a .sha1 file, which is
+  //       worse than no checksum at all (review on #35). Hashing the file is
+  //       authoritative and cannot silently degrade. The packer's own value is
+  //       still cross-checked below when present.
+  const shasum = createHash("sha1")
+    .update(readFileSync(outFile))
+    .digest("hex");
+  const packerSha = /shasum:\s*([0-9a-f]{40})/.exec(stdout)?.[1];
+  if (packerSha && packerSha !== shasum) {
+    fail(
+      `digest mismatch: packer reported ${packerSha} but the file on disk hashes to ${shasum}`
+    );
+  }
+
   console.error(
-    `\n=== Built ${outFile} — ${(bytes / 1024 / 1024).toFixed(1)} MB, shasum ${shasum} ===`
+    `\n=== Built ${outFile} — ${(bytes / BYTES_PER_MB).toFixed(1)} MB, shasum ${shasum} ===`
   );
   writeFileSync(
     `${outFile}.sha1`,
@@ -300,6 +349,9 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error("build-mcpb failed:", err);
-    process.exit(1);
+    // WHY: Unexpected throws (fs, JSON.parse, a subprocess) previously exited 1
+    //      with nothing on stdout, breaking the one-JSON-summary contract that
+    //      schedulers and MAESTER parse. Route them through fail() so EVERY
+    //      fatal path emits exactly one machine-readable result.
+    fail(err instanceof Error ? err.message : String(err));
   });
