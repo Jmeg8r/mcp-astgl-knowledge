@@ -33,7 +33,10 @@ against the registry.
    permanent 293-article "gap" that is the gate working correctly. An alert that always fires gets
    muted, which is the exact mechanism by which the original gap went unread.
 6. **Make "could not tell" loud and distinct from "in sync."** On any failure the delta is `null`,
-   never `0`, and the check fires a warning *about its own blindness*.
+   never `0`, and the check alerts *about its own blindness*. Severity follows the reason:
+   unreachable registry or tarball is a **warning** (transient, retry), but
+   `tarball_member_missing` — a package published with no database in it — is **critical**, because
+   that is a shipped defect rather than a failed reading.
 7. **Give the negative result a control.** A zero-delta reading on publish day proves almost nothing.
    Flipped 30 withheld rows public on a DB *copy* → delta 30, critical alert. Stubbed `fetch` to
    throw → `null`, warning. Only then was "delta 0" believable.
