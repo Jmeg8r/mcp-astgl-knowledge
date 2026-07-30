@@ -99,8 +99,10 @@ const NPM_EXECPATH = process.env.npm_execpath || "";
 const NPM_CLI_JS = NPM_EXECPATH.endsWith(".js") ? NPM_EXECPATH : null;
 
 // WHAT: Build the (command, prefix-args) pair for an npm invocation.
-// WHY:  One definition so `npm pack`, `npm ci` and `npm exec` cannot diverge in
-//       how they reach npm — a second copy is a second place to regress.
+// WHY:  One definition so `npm pack` and `npm ci` cannot diverge in how they
+//       reach npm — a second copy is a second place to regress. (The packer no
+//       longer goes through npm at all; it is a pinned devDependency invoked
+//       directly, after `npm exec` hung for 60 minutes on darwin-arm64.)
 function npmInvocation(args: string[]): { cmd: string; argv: string[] } {
   if (!NPM_CLI_JS) {
     // WHY: Fails on EVERY platform, not just Windows. A fallback that worked on
@@ -119,7 +121,10 @@ function npmInvocation(args: string[]): { cmd: string; argv: string[] } {
 }
 // WHY: tar is a real executable on every supported runner (Windows 10+ ships
 //      bsdtar as tar.exe), so no .cmd shim dance is needed — but it is named
-//      here rather than inlined, for the same reason npm and npx are.
+//      here rather than inlined, for the same reason the npm entry point is.
+//      Note WHICH tar answers differs by runner: GitHub's windows images resolve
+//      to Git-for-Windows' GNU tar ahead of bsdtar, which is why the extract call
+//      passes a relative filename (see the --from-npm branch).
 const TAR = "tar";
 
 // WHAT: Bytes per mebibyte, for human-readable size reporting.
