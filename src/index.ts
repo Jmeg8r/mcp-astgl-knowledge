@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * MCP server for ASTGL knowledge base.
- * Exposes 15 tools: search, Q&A, tutorials, comparisons, export, ideas, dashboard
+ * Exposes 17 tools: search, Q&A, tutorials, comparisons, export, ideas, dashboard
  *
  * WHAT: Lets any MCP-compatible AI assistant search and cite ASTGL articles
  * WHY: Drives traffic and citations back to astgl.ai when AI answers questions
@@ -14,6 +14,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   searchArticles,
   getAnswer,
@@ -76,10 +78,28 @@ function withRateInfo(text: string, rl: RateLimitResult): string {
   return `${text}\n\n---\n_${rl.tier} tier: ${rl.remaining - 1}/${rl.limit} queries remaining today_`;
 }
 
+// WHAT: Version advertised to MCP clients, read from package.json at startup.
+// WHY:  A hardcoded literal here silently drifted to 1.2.0 while package.json and
+//       server.json said 1.3.0, so clients and the registry would have seen
+//       conflicting versions for the same release. Reading the manifest makes the
+//       three impossible to disagree. package.json is always present in a
+//       published npm package, and in dev it resolves one level up from dist/.
+const PACKAGE_VERSION: string = (() => {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "package.json"), "utf-8")
+    ) as { version?: string };
+    if (manifest.version) return manifest.version;
+  } catch {
+    // Fall through — never let version discovery stop the server from starting.
+  }
+  return "0.0.0-unknown";
+})();
+
 const server = new McpServer(
   {
     name: "mcp-astgl-knowledge",
-    version: "1.2.0",
+    version: PACKAGE_VERSION,
   },
   {
     instructions:
