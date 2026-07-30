@@ -1,0 +1,259 @@
+# WHAT: Builds one MCPB bundle per platform and attaches them to a release.
+# WHY:  MCPB requires bundling node_modules, and this package has native
+#       dependencies — better-sqlite3 compiles a .node per platform and Node ABI,
+#       sqlite-vec resolves its binary through per-platform optionalDependencies.
+#       A bundle is therefore only valid on the platform that built it, so the
+#       only way to ship more than macOS is to build on each one.
+#
+# The database problem and how this solves it: build/knowledge-public.db derives
+# from data/knowledge.db, which is NOT in the repo and must never be. A runner
+# cannot produce the pruned artifact from source. Instead each job sources dist/
+# and the database from the PUBLISHED npm tarball via `--from-npm`, which is
+# already gate-verified. Consequences: no private content ever reaches CI, and a
+# bundle can never carry content the npm package does not.
+#
+# Therefore this workflow REQUIRES the npm version to be published first.
+#
+# Injection safety: every `${{ }}` value that reaches a `run:` block does so
+# through `env:` and is referenced as a quoted shell variable. Release tag names
+# and workflow_dispatch inputs are attacker-influenceable in principle, and
+# interpolating them directly into a shell would be a command-injection hole.
+
+name: build-mcpb
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published npm version to bundle (e.g. 1.3.0)"
+        required: true
+        type: string
+      attach_to_release:
+        description: "Attach the bundles to the matching GitHub release"
+        required: false
+        default: false
+        type: boolean
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # WHY: fail-fast off so one platform's failure still yields the others —
+      #      a broken Windows prebuild should not withhold a working macOS bundle.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: darwin-arm64
+            platforms: darwin
+          - os: macos-13
+            label: darwin-x64
+            platforms: darwin
+          - os: ubuntu-latest
+            label: linux-x64
+            platforms: linux
+          - os: windows-latest
+            label: win32-x64
+            platforms: win32
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHY: Node is pinned, not floated. better-sqlite3's compiled binary is
+      #      tied to the Node ABI, so a runner silently moving to a new major
+      #      would produce bundles that fail at require() time on clients running
+      #      the older ABI. Bump this deliberately, and re-verify when you do.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.14.0"
+
+      # WHY: The repo's own deps are needed to RUN the build script (tsx, and
+      #      better-sqlite3 for the gate assertion). The bundle's dependencies
+      #      are installed separately by the script, into its stage.
+      - name: Install repo toolchain
+        run: npm ci
+
+      - name: Resolve version to bundle
+        id: ver
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            # Release tags are conventionally v1.3.0; the npm version is 1.3.0.
+            V="${RELEASE_TAG#v}"
+          else
+            V="$INPUT_VERSION"
+          fi
+          # WHY: Validate the shape before it reaches npm or a filename. This is
+          #      the boundary where an arbitrary tag name stops being arbitrary.
+          if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::'$V' is not a plain semver version"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Bundling npm version $V"
+
+      # WHY: Fail here with a clear message rather than deep inside the build.
+      #      The workflow is meaningless if the version was never published.
+      - name: Verify the version is published
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! npm view "mcp-astgl-knowledge@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::mcp-astgl-knowledge@$VERSION is not on npm. Publish it before building bundles."
+            exit 1
+          fi
+
+      - name: Build bundle
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PLATFORMS: ${{ matrix.platforms }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          npm run build-mcpb -- \
+            --from-npm "$VERSION" \
+            --platforms "$PLATFORMS" \
+            --label "$LABEL"
+
+      # WHY: Assert on the artifact this job produced, on this platform, rather
+      #      than trusting the build's own summary. Checks the manifest declares
+      #      only this platform, the version matches, and the database carries no
+      #      withheld rows or drafts.
+      - name: Verify bundle
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PLATFORMS: ${{ matrix.platforms }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          BUNDLE="dist-mcpb/astgl-knowledge-${VERSION}-${LABEL}.mcpb"
+          test -f "$BUNDLE" || { echo "::error::bundle missing at $BUNDLE"; exit 1; }
+          mkdir -p _verify && cd _verify && unzip -q "../$BUNDLE"
+          # Values reach node through the environment, never through string
+          # interpolation into the script body.
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            const want = process.env.PLATFORMS;
+            const got = (m.compatibility && m.compatibility.platforms) || [];
+            if (got.length !== 1 || got[0] !== want) {
+              console.error("::error::manifest platforms " + JSON.stringify(got) + " != [" + want + "]");
+              process.exit(1);
+            }
+            if (m.version !== process.env.VERSION) {
+              console.error("::error::manifest version " + m.version + " != " + process.env.VERSION);
+              process.exit(1);
+            }
+            if (!fs.existsSync("build/knowledge-public.db")) {
+              console.error("::error::no database in bundle"); process.exit(1);
+            }
+            console.log("manifest ok: " + m.name + " " + m.version + " [" + got.join(",") + "], " + m.tools.length + " tools");
+          '
+          node -e '
+            const D = require("better-sqlite3");
+            const db = new D("build/knowledge-public.db", { readonly: true });
+            const n = s => db.prepare(s).get().n;
+            const withheld = n("SELECT COUNT(*) AS n FROM articles WHERE public = 0");
+            const drafts = n("SELECT COUNT(*) AS n FROM articles WHERE content_type = \x27draft\x27");
+            const total = n("SELECT COUNT(*) AS n FROM articles");
+            if (withheld || drafts || !total) {
+              console.error("::error::gate violation: " + withheld + " withheld, " + drafts + " drafts, " + total + " total");
+              process.exit(1);
+            }
+            console.log("gate ok: " + total + " articles, 0 withheld, 0 drafts");
+          '
+
+      # WHY: A bundle that packs but cannot start is worse than a failed build —
+      #      it ships. This drives a real MCP handshake against the extracted
+      #      bundle on the platform it targets, which is the only place the
+      #      native binaries can actually be exercised. list_tags is chosen
+      #      deliberately: it is the non-vector path, so it proves
+      #      better-sqlite3's native binary loaded without needing a model.
+      - name: Smoke test the extracted bundle
+        shell: bash
+        env:
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          cd _verify
+          cat > smoke.mjs <<'JS'
+          import { spawn } from "node:child_process";
+          const p = spawn("node", [`${process.cwd()}/dist/index.js`],
+            { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ASTGL_API_KEY: "" } });
+          let out = "", err = "";
+          p.stdout.on("data", d => out += d); p.stderr.on("data", d => err += d);
+          const send = o => p.stdin.write(JSON.stringify(o) + "\n");
+          send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ci", version: "1" } } });
+          await new Promise(r => setTimeout(r, 5000));
+          send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+          send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_tags", arguments: {} } });
+          await new Promise(r => setTimeout(r, 9000));
+          p.kill();
+          let info = null, tools = 0, tagChars = 0;
+          for (const l of out.split("\n").filter(Boolean)) {
+            try {
+              const m = JSON.parse(l);
+              if (m.id === 1) info = m.result?.serverInfo;
+              if (m.id === 2) tools = m.result?.tools?.length ?? 0;
+              if (m.id === 3) tagChars = (m.result?.content?.[0]?.text ?? "").length;
+            } catch {}
+          }
+          console.log("serverInfo:", JSON.stringify(info), "tools:", tools, "list_tags chars:", tagChars);
+          if (err.trim()) console.log("stderr:", err.trim().split("\n")[0]);
+          if (!info || tools !== 17 || tagChars === 0) {
+            console.error(`::error::smoke test failed on ${process.env.LABEL}`);
+            process.exit(1);
+          }
+          JS
+          node smoke.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-${{ matrix.label }}
+          path: |
+            dist-mcpb/*.mcpb
+            dist-mcpb/*.sha1
+          if-no-files-found: error
+          retention-days: 30
+
+  attach:
+    name: Attach to release
+    needs: bundle
+    if: github.event_name == 'release' || inputs.attach_to_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: List what will be attached
+        run: ls -lh bundles/
+
+      # WHY: This action is pinned to a commit SHA rather than a moving tag. It
+      #      receives contents:write, and a tag that can be repointed by the
+      #      action's owner is a supply-chain hole at that permission level.
+      - uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.0.8
+        with:
+          tag_name: ${{ github.event.release.tag_name || format('v{0}', inputs.version) }}
+          files: |
+            bundles/*.mcpb
+            bundles/*.sha1
+          fail_on_unmatched_files: true

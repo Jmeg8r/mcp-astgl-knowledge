@@ -376,9 +376,37 @@ SECOND artifact that can ship content, so it goes through the same publication g
 - **Version agreement is enforced**: `package.json` and `mcpb/manifest.json` must match or
   the build fails. `server.json` is the third copy — keep all three in step.
 
-→ **PLATFORM: the bundle is darwin-arm64 ONLY.** `better-sqlite3` compiles a native `.node`
-per platform and Node ABI; `sqlite-vec` resolves its binary through per-platform
-`optionalDependencies`. Other platforms require a CI matrix running this script on each.
+→ **PLATFORM: a bundle is only valid on the platform that built it.** `better-sqlite3`
+compiles a native `.node` per platform and Node ABI; `sqlite-vec` resolves its binary through
+per-platform `optionalDependencies`. Multi-platform bundles come from
+`.github/workflows/build-mcpb.yml`, which runs this script on macos-14 (arm64), macos-13
+(x64), ubuntu-latest, and windows-latest.
+
+### The CI matrix and why it sources from npm
+
+The workflow **requires the npm version to be published first**, because `build/knowledge-public.db`
+derives from `data/knowledge.db`, which is not in the repo and must never be — a runner cannot
+produce the pruned artifact from source. Each job instead passes `--from-npm <version>`, which
+pulls dist/ and the database out of the **published tarball**, already gate-verified.
+
+Two consequences worth keeping: no private content ever reaches CI, and a bundle can never
+carry content the npm package does not.
+
+- Node is **pinned** in the workflow (`24.14.0`). better-sqlite3's binary is tied to the Node
+  ABI, so a floating runner version would silently emit bundles that fail at `require()` on
+  clients using the older ABI. Bump deliberately and re-verify.
+- Each job stamps `compatibility.platforms` to its own platform via `--platforms`, so a
+  Windows user never downloads a bundle full of darwin binaries.
+- Each job **re-verifies its own artifact** — manifest platform and version, gate counts —
+  then smoke-tests the extracted bundle with a real MCP handshake. `list_tags` is the chosen
+  probe because it is the non-vector path, proving the native binary loaded without a model.
+- `fail-fast: false`, so a broken prebuild on one platform still yields the others.
+- Cross-platform gotcha already handled: on Windows `npm`/`npx` are `.cmd` shims and
+  `execFile` finds neither, so `build-mcpb.ts` resolves `npm.cmd`/`npx.cmd` there rather than
+  enabling a shell (which would reintroduce a quoting/injection surface).
+- Workflow injection: every `${{ }}` value reaching a `run:` block goes through `env:` and is
+  referenced as a quoted shell variable, and the resolved version is semver-validated before
+  it touches npm or a filename.
 
 → **`npm pack` does not run `prepublishOnly`.** That is why the gate chain lives in
 `prepack`. Before this was found, `npm pack` silently produced a 145 kB tarball with no

@@ -56,7 +56,43 @@ const PACK_TIMEOUT_MS = 300_000;
 //       the artifact's structure change without a commit here saying so.
 const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
 
-const FLAGS = { dryRun: process.argv.includes("--dry-run") };
+// WHAT: Platform-correct executable names for npm and npx.
+// WHY:  On Windows both are `.cmd` shims. execFile does not spawn a shell, so
+//       execFile("npm", …) fails with ENOENT there — which would break the
+//       win32 matrix job while every other platform passed. Resolved here rather
+//       than by enabling a shell, since shell:true would reintroduce the quoting
+//       and injection surface this script deliberately avoids.
+const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
+
+// WHAT: Read a `--flag value` pair from argv.
+// WHY:  Matches the repo's hand-rolled argv convention — no arg-parsing dep.
+function argValue(name: string): string | undefined {
+  const i = process.argv.indexOf(name);
+  return i !== -1 ? process.argv[i + 1] : undefined;
+}
+
+const FLAGS = {
+  dryRun: process.argv.includes("--dry-run"),
+  // WHAT: Source dist/ and the pruned database from a PUBLISHED npm version
+  //       instead of the local working tree.
+  // WHY:  This is what makes a CI matrix possible. data/knowledge.db is not in
+  //       the repo and must never be, so a runner cannot produce the pruned
+  //       artifact from source. The published tarball already contains a
+  //       gate-verified build/knowledge-public.db, so sourcing from there means
+  //       no private data reaches CI, and a bundle can never carry content the
+  //       npm package does not. Provenance is the published release.
+  fromNpm: argValue("--from-npm"),
+  // WHAT: Override compatibility.platforms in the staged manifest.
+  // WHY:  Each platform's bundle must advertise only the platform whose native
+  //       binaries it actually contains, or a Windows user downloads a bundle
+  //       carrying a darwin .node and gets a broken server.
+  platforms: argValue("--platforms")?.split(",").map((p) => p.trim()).filter(Boolean),
+  // WHAT: Suffix for the output filename, e.g. darwin-arm64.
+  // WHY:  A matrix produces several bundles for one version; without a suffix
+  //       they overwrite each other.
+  label: argValue("--label"),
+};
 
 interface Summary {
   built: boolean;
@@ -115,18 +151,59 @@ async function main(): Promise<void> {
     );
   }
 
-  if (!existsSync(PUBLIC_DB)) {
+  if (!FLAGS.fromNpm && !existsSync(PUBLIC_DB)) {
     fail(
-      `pruned database missing at ${PUBLIC_DB} — run 'npm run build-public-db' first`
+      `pruned database missing at ${PUBLIC_DB} — run 'npm run build-public-db' first, or pass --from-npm <version>`
     );
   }
   if (!existsSync(MANIFEST)) fail(`manifest missing at ${MANIFEST}`);
 
+  // WHAT: Populate the stage's content (package.json, dist/, build/, README)
+  //       from either the published tarball or the local working tree.
+  // WHY:  Done before the gate and version checks so those checks run against
+  //       what will ACTUALLY be packed, not against whatever the working tree
+  //       happens to hold. Checking the local copy and shipping a different one
+  //       is how npm pack shipped an empty database.
+  rmSync(STAGE, { recursive: true, force: true });
+  mkdirSync(STAGE, { recursive: true });
+
+  if (FLAGS.fromNpm) {
+    console.error(`  Sourcing content from npm: mcp-astgl-knowledge@${FLAGS.fromNpm}`);
+    await execFileAsync(
+      NPM,
+      ["pack", `mcp-astgl-knowledge@${FLAGS.fromNpm}`, "--pack-destination", STAGE],
+      { cwd: STAGE, timeout: NPM_CI_TIMEOUT_MS }
+    );
+    const tgz = join(STAGE, `mcp-astgl-knowledge-${FLAGS.fromNpm}.tgz`);
+    if (!existsSync(tgz)) fail(`npm pack produced no tarball for ${FLAGS.fromNpm}`);
+    // --strip-components=1 unwraps the tarball's "package/" prefix so the stage
+    // layout matches a local build exactly.
+    await execFileAsync("tar", ["-xzf", tgz, "-C", STAGE, "--strip-components=1"], {
+      cwd: STAGE,
+      timeout: PACK_TIMEOUT_MS,
+    });
+    rmSync(tgz, { force: true });
+    // WHY: The published tarball omits the lockfile, but `npm ci` requires one.
+    //      Take it from the checkout — it is the tree the release was built from.
+    copyFileSync(join(ROOT, "package-lock.json"), join(STAGE, "package-lock.json"));
+  } else {
+    cpSync(join(ROOT, "dist"), join(STAGE, "dist"), { recursive: true });
+    mkdirSync(join(STAGE, "build"), { recursive: true });
+    copyFileSync(PUBLIC_DB, join(STAGE, "build", "knowledge-public.db"));
+    for (const f of ["package.json", "package-lock.json", "README.md"]) {
+      copyFileSync(join(ROOT, f), join(STAGE, f));
+    }
+  }
+
+  const stagedDb = join(STAGE, "build", "knowledge-public.db");
+  if (!existsSync(stagedDb)) fail(`staged content has no database at ${stagedDb}`);
+
   const pkg = JSON.parse(
-    readFileSync(join(ROOT, "package.json"), "utf-8")
+    readFileSync(join(STAGE, "package.json"), "utf-8")
   ) as { version: string };
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf-8")) as {
     version: string;
+    compatibility?: { platforms?: string[] };
   };
 
   // WHY: Three files carry the version (package.json, mcpb/manifest.json,
@@ -138,12 +215,16 @@ async function main(): Promise<void> {
     );
   }
 
-  const articles = assertGatePassed(PUBLIC_DB);
+  const articles = assertGatePassed(stagedDb);
   console.error(`  Gate check: ${articles} articles, 0 withheld, 0 drafts`);
   console.error(`  Version:    ${pkg.version}`);
 
   if (FLAGS.dryRun) {
-    console.error("\n  Would assemble: manifest.json, dist/, build/, node_modules/ (prod)");
+    console.error(
+      `\n  Would assemble: manifest.json, dist/, build/, node_modules/ (prod)` +
+        `\n  Source: ${FLAGS.fromNpm ? `npm@${FLAGS.fromNpm}` : "local working tree"}` +
+        `\n  Platforms: ${(FLAGS.platforms ?? manifest.compatibility?.platforms ?? []).join(", ") || "(manifest default)"}`
+    );
     console.log(
       JSON.stringify({
         built: false,
@@ -156,20 +237,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  // --- Stage ---
-  rmSync(STAGE, { recursive: true, force: true });
-  mkdirSync(join(STAGE, "build"), { recursive: true });
-  copyFileSync(MANIFEST, join(STAGE, "manifest.json"));
-  cpSync(join(ROOT, "dist"), join(STAGE, "dist"), { recursive: true });
-  copyFileSync(PUBLIC_DB, join(STAGE, "build", "knowledge-public.db"));
-  for (const f of ["package.json", "package-lock.json", "README.md"]) {
-    copyFileSync(join(ROOT, f), join(STAGE, f));
+  // --- Write the manifest into the stage, platform-stamped ---
+  // WHY: compatibility.platforms must describe the native binaries this bundle
+  //      actually carries. The matrix passes --platforms per runner.
+  if (FLAGS.platforms?.length) {
+    manifest.compatibility = { ...manifest.compatibility, platforms: FLAGS.platforms };
+    console.error(`  Manifest platforms → ${FLAGS.platforms.join(", ")}`);
   }
+  writeFileSync(join(STAGE, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 
   // WHY: --omit=dev keeps typescript/tsx out of a distributed artifact. `npm ci`
   //      rather than `npm install` so the tree matches the committed lockfile.
   console.error("\n  Installing production dependencies into the stage…");
-  await execFileAsync("npm", ["ci", "--omit=dev"], {
+  await execFileAsync(NPM, ["ci", "--omit=dev"], {
     cwd: STAGE,
     timeout: NPM_CI_TIMEOUT_MS,
   });
@@ -179,12 +259,13 @@ async function main(): Promise<void> {
   rmSync(join(STAGE, "package-lock.json"), { force: true });
 
   mkdirSync(OUT_DIR, { recursive: true });
-  const outFile = join(OUT_DIR, `astgl-knowledge-${pkg.version}.mcpb`);
+  const suffix = FLAGS.label ? `-${FLAGS.label}` : "";
+  const outFile = join(OUT_DIR, `astgl-knowledge-${pkg.version}${suffix}.mcpb`);
   rmSync(outFile, { force: true });
 
   console.error("  Packing…");
   const { stdout } = await execFileAsync(
-    "npx",
+    NPX,
     ["--yes", MCPB_CLI, "pack", STAGE, outFile],
     { cwd: ROOT, timeout: PACK_TIMEOUT_MS }
   );
@@ -199,8 +280,8 @@ async function main(): Promise<void> {
     `\n=== Built ${outFile} — ${(bytes / 1024 / 1024).toFixed(1)} MB, shasum ${shasum} ===`
   );
   writeFileSync(
-    join(OUT_DIR, `astgl-knowledge-${pkg.version}.mcpb.sha1`),
-    `${shasum}  astgl-knowledge-${pkg.version}.mcpb\n`
+    `${outFile}.sha1`,
+    `${shasum}  astgl-knowledge-${pkg.version}${suffix}.mcpb\n`
   );
 
   console.log(
