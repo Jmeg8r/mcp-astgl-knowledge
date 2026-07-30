@@ -1,13 +1,26 @@
 startCommand:
   type: stdio
 
-configSchema:
-  type: object
-  properties: {}
+  # WHAT: Optional API key that lifts the caller from 50 to 500 queries/day.
+  # WHY:  Declared here because Smithery renders configSchema as the user's config
+  #       form — an empty schema left registered users no way to supply a key, so
+  #       every Smithery caller was silently capped at the anonymous tier.
+  #       Read by src/rate-limit.ts via process.env.ASTGL_API_KEY.
+  configSchema:
+    type: object
+    properties:
+      astglApiKey:
+        type: string
+        title: ASTGL API key
+        description: >-
+          Optional. Raises your limit from 50 to 500 queries/day. Get one by
+          calling the `register` tool with your email address.
+    additionalProperties: false
 
-commandFunction:
-  |-
-  (config) => ({
-    command: 'node',
-    args: ['dist/index.js']
-  })
+  commandFunction:
+    |-
+    (config) => ({
+      command: 'node',
+      args: ['dist/index.js'],
+      env: config.astglApiKey ? { ASTGL_API_KEY: config.astglApiKey } : {}
+    })
