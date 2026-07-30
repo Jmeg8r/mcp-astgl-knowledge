@@ -36,7 +36,8 @@
     "dashboard-data": "tsx src/dashboard.ts",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "prepack": "npm run build && npm run reclassify-wiki && npm run build-public-db"
+    "prepack": "npm run build && npm run reclassify-wiki && npm run build-public-db",
+    "build-mcpb": "tsx src/build-mcpb.ts"
   },
   "repository": {
     "type": "git",

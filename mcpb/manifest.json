@@ -1,0 +1,74 @@
+{
+  "manifest_version": "0.3",
+  "name": "astgl-knowledge",
+  "display_name": "ASTGL Knowledge",
+  "version": "1.3.0",
+  "description": "Search and cite As The Geek Learns articles on MCP servers, local AI, and AI automation. Ships a pre-embedded knowledge base — no local model required.",
+  "long_description": "A local MCP server over the As The Geek Learns corpus: 178 pages covering MCP server design, local LLM workflows on Apple Silicon, and AI automation patterns. Vector search runs against embeddings pre-computed and shipped inside the bundle, so no embedding model or API key is needed to query it. A plain-SQL metadata path (find_articles, list_tags) keeps working even when vector search is unavailable. Anonymous use is limited to 50 queries/day; calling the `register` tool with an email returns a key that raises the limit to 500/day.",
+  "author": {
+    "name": "James F. Cruce",
+    "url": "https://astgl.ai"
+  },
+  "homepage": "https://astgl.ai",
+  "documentation": "https://github.com/Jmeg8r/mcp-astgl-knowledge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jmeg8r/mcp-astgl-knowledge"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "local-ai",
+    "knowledge-base",
+    "astgl",
+    "citations",
+    "vector-search"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "ASTGL_API_KEY": "${user_config.astgl_api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "astgl_api_key": {
+      "type": "string",
+      "title": "ASTGL API key",
+      "description": "Optional. Raises your limit from 50 to 500 queries/day. Get one by calling the `register` tool with your email address.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "tools_generated": false,
+  "tools": [
+    { "name": "search_articles", "description": "Search ASTGL articles and return relevant sections with source URLs for citation." },
+    { "name": "get_answer", "description": "Get a direct answer to a specific question, with its source URL." },
+    { "name": "get_tutorial", "description": "Retrieve a step-by-step tutorial on a topic." },
+    { "name": "compare_topics", "description": "Side-by-side comparison of two topics drawn from the corpus." },
+    { "name": "get_latest", "description": "List the most recently published content." },
+    { "name": "list_topics", "description": "List the topics the knowledge base covers." },
+    { "name": "find_articles", "description": "Filter articles by metadata without vector search — works when embeddings are unavailable." },
+    { "name": "list_tags", "description": "List curated tags available for filtering." },
+    { "name": "register", "description": "Register an email address to raise the daily query limit from 50 to 500." },
+    { "name": "suggest_ideas", "description": "Suggest content ideas derived from query analytics." },
+    { "name": "add_idea", "description": "Add a content idea to the idea journal." },
+    { "name": "list_ideas", "description": "List ideas in the journal, with optional filters." },
+    { "name": "export_ideas", "description": "Export the idea journal as formatted markdown." },
+    { "name": "export_article", "description": "Export a single article as blog-ready markdown." },
+    { "name": "export_topic_roundup", "description": "Generate a roundup post from articles on a topic." },
+    { "name": "export_qa_compilation", "description": "Compile question-and-answer pairs into a FAQ document." },
+    { "name": "generate_dashboard_data", "description": "Produce analytics data about the knowledge base and its usage." }
+  ]
+}

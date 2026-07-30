@@ -8,7 +8,10 @@ whole file before your first edit.
 ## What this repo actually is
 
 1. **A published MCP stdio server** (`src/index.ts` → npm package `mcp-astgl-knowledge`,
-   registered on Smithery and the MCP registry). 17 tool handlers reading
+   registered on the MCP registry at 1.3.0. **NOT on Smithery** — the earlier claim here
+   was wrong; search returns nothing and every qualified-name probe 404s. An MCPB bundle
+   for Smithery is built by `npm run build-mcpb` but has not been published). 17 tool
+   handlers reading
    `data/knowledge.db`. Consumed by MAESTER (the ClaudeClaw agent) and by strangers on
    the public internet. Rate-limited (50/day anon, 500/day registered).
 2. **Content pipelines** that keep `knowledge.db` populated: RSS/sitemap discovery →
@@ -356,3 +359,27 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
+
+## The MCPB bundle (added 2026-07-30)
+
+Smithery's stdio distribution path is an **MCPB bundle**, not the npm tarball — clients
+download and run it locally. Because MCPB requires bundling `node_modules`, the bundle is a
+SECOND artifact that can ship content, so it goes through the same publication gate.
+
+- **`npm run build-mcpb`** — stages `manifest.json` + `dist/` + `build/knowledge-public.db`
+  + production-only `node_modules`, packs to `dist-mcpb/`, writes a `.sha1`. `--dry-run`
+  supported. Output is gitignored: a distributable artifact, never source.
+- **It re-asserts the gate** before packing, and refuses with a row count if the database
+  carries withheld rows or drafts. `build-public-db` verifies the artifact it writes, but
+  this script can run much later against a stale `build/` — an artifact that exists is not
+  an artifact that is current (see the `npm pack` incident below).
+- **Version agreement is enforced**: `package.json` and `mcpb/manifest.json` must match or
+  the build fails. `server.json` is the third copy — keep all three in step.
+
+→ **PLATFORM: the bundle is darwin-arm64 ONLY.** `better-sqlite3` compiles a native `.node`
+per platform and Node ABI; `sqlite-vec` resolves its binary through per-platform
+`optionalDependencies`. Other platforms require a CI matrix running this script on each.
+
+→ **`npm pack` does not run `prepublishOnly`.** That is why the gate chain lives in
+`prepack`. Before this was found, `npm pack` silently produced a 145 kB tarball with no
+database at all, and npm did not complain that a `files` entry pointed at a missing path.
