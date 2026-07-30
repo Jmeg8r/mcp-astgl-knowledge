@@ -156,7 +156,12 @@ Mechanisms, all shipped 2026-07-29:
   It never mutates the source. `--dry-run` reports the full classification and a sample of
   what would be pruned.
 - `package.json` `files` ships `build/knowledge-public.db`; `data/knowledge.db` is no longer
-  in the package. `prepublishOnly` runs the build, so a publish cannot skip the prune.
+  in the package. **`prepack`** runs `build → reclassify-wiki → build-public-db`, so a
+  publish cannot skip the prune. (This ADR originally named `prepublishOnly`; the hook
+  actually defined is `prepack`. Corrected 2026-07-30. The gate holds either way — npm runs
+  `prepack` during `npm publish` — but the distinction matters: `prepublishOnly` does **not**
+  run for `npm pack`, which is exactly how a 145 kB tarball once got built with no database
+  in it at all. `prepack` covers both paths.)
 - `src/db-path.ts` resolves which database to read — the full one locally, the pruned one on
   an installed package — so the server, `ideas.ts`, and `export.ts` cannot disagree.
 - Post-prune verification asserts on the artifact itself: zero withheld rows, zero orphan
@@ -187,6 +192,7 @@ that does not cross the boundary it is meant to police reports motion, not diver
   indexes is a defensible design choice, and the paper now says so.
 - Roadmap item #2 is replaced by **"close the publish gap"**: cut a release, then
   instrument the local-vs-published delta so it cannot go unread again.
+  **Both halves are now done** (see *The publish-gap instrument* below).
 - **A release is a content-review event, not a version bump** — but the review is now
   front-loaded into the `public: true` gate rather than repeated per release. The `astgl`
   tag alone is not a sufficient boundary between a private vault and a public npm tarball
@@ -243,7 +249,8 @@ sixth place to look.
   behind a `public: true` gate. See *Scope of what ships* under Decision.
 - What is the right republish cadence once the gap is closed — every wiki-sync, weekly, or
   on article publish? The instrument should be built first; the cadence follows from what
-  it shows.
+  it shows. **Still open, but now answerable** — the instrument shipped 2026-07-30 (see the
+  amendment below), so the delta is a measured number rather than a guess.
 - ~~Does MAESTER's local usage want the full 190-page tagged set while the public package
   gets the ~75-page allowlist?~~ **Resolved 2026-07-29 — yes.** MAESTER keeps the full set;
   the gate is a publish-time prune against a `public` column, not an ingest-time skip. See
@@ -297,7 +304,7 @@ The first response was to keep the policy and add visibility — `reclassify-wik
 gate flip and runs immediately before the prune, so a newly-public concept prints at publish
 time. On reflection that is a weaker control than simply naming what ships: it depends on
 someone reading publish output and reacting, which is the same human-memory dependency the
-`prepublishOnly` fix had just removed.
+`prepack` fix had just removed.
 
 **Concepts are now allowlisted** (`CONCEPT_ALLOWLIST`, 68 titles). The gate is fail-closed
 with no exceptions: an unrecognized content type, an unrecognized origin, an unnamed entity,
@@ -310,3 +317,65 @@ the behaviour for content that does not exist yet.
 
 Verified across all input classes, including the case that motivated the change: a concept
 title absent from the allowlist resolves to withheld rather than public.
+
+---
+
+## Amendment (2026-07-30) — the publish-gap instrument
+
+The release half of roadmap item #2 shipped as `mcp-astgl-knowledge@1.3.0` (2026-07-30,
+04:24 UTC). This amendment records the instrument half.
+
+**`src/publish-drift.ts`** compares, on every freshness run:
+
+| Near side (this machine) | Far side (the registry) |
+|---|---|
+| `articles WHERE public = 1` in `data/knowledge.db` | `articles` in the database inside the published tarball |
+| chunks belonging to those articles | chunks in that same published database |
+| `package.json` version | `dist-tags.latest` |
+| — | `time[latest]` → **days since last publish** |
+
+It reports the delta plus days-since-last-publish, and alerts through `freshness.ts`
+(check #4, `publish_gap`) using the alert-history cooldown and Discord path that already
+existed. `npm run publish-drift` is `freshness --only publish_gap`.
+
+**Design constraints, taken directly from this ADR's own findings:**
+
+- *"A drift metric that does not cross the boundary it is meant to police reports motion,
+  not divergence."* Every headline number therefore has one side on this machine and one
+  side on npm. Registry metadata alone (`unpackedSize`, `fileCount`) was rejected as a
+  proxy: it would have moved when `dist/` changed and stayed flat when only content did.
+  The instrument downloads the tarball and counts rows in the actual shipped database.
+- **The local comparator is `public = 1`, never `COUNT(*)`.** Comparing all 471 local rows
+  against the 178 published ones would report a permanent ~293-article "gap" that is the
+  publication gate working correctly. A metric that cries wolf forever gets muted — which
+  is how the original 3.5-month gap went unread.
+- **A failed measurement is never a zero.** If the registry or the tarball cannot be read,
+  `articles_delta` is `null` (not `0`), `content_measured` is `false`, and the check fires
+  a *warning alert about its own blindness*. "In sync" and "could not tell" must not look
+  alike. Likewise `--only` rejects an unknown check name rather than silently running none,
+  and a skipped check reports `null` counts rather than zeros.
+- **Only a positive delta alerts.** A negative delta (registry ahead of local) is the normal
+  state of any fresh clone, since `data/knowledge.db` is tracked in git at a far older
+  revision than the live file. It is reported but not alerted.
+
+**Cost.** The published tarball is 4.7 MB compressed (75.7 MB unpacked — SQLite pages
+compress well), and a cold measurement takes ~2 s. Because npm versions are immutable, the
+measurement is cached in `ecosystem_snapshots.metrics` keyed by published version and
+re-validated against `dist.shasum`, so the download happens once per release, not once per
+run; a warm run is ~0.2 s. `--skip-tarball` suppresses the download entirely and still
+reports from cache.
+
+**Verified 2026-07-30** against the live registry and a copy of the production database:
+178 local publishable vs 178 published, 1296 vs 1296 chunks, delta 0, `in_sync`, no alert.
+Because a zero-delta reading on publish day proves little, the negative result was given a
+control: flipping 30 withheld rows to `public = 1` on the copy produced `articles_delta: 30`
+and a **critical** alert, and stubbing `fetch` to fail produced `articles_delta: null` with a
+**warning** alert rather than silence.
+
+**Also corrected in this pass:** two references to a `prepublishOnly` lifecycle hook that
+does not exist — `package.json` defines `prepack`. See the note under *Mechanisms*.
+
+**This answers the open question about cadence** only partially. The instrument now makes
+the gap visible; what it shows over the next weeks is what should set the republish cadence.
+The remaining judgement is what delta is worth a release, and that is now a number rather
+than a guess.

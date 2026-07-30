@@ -213,7 +213,7 @@ never a retry loop.**
 ## Quality bar — checkable, per deliverable
 
 **Any code change (baseline):**
-- [ ] `npm run build` passes (tsc strict — this is the only compile gate; there are no tests or linter yet).
+- [ ] `npm run build` passes (tsc strict) **and `npm test` passes** (node:test via tsx; added 2026-07-30). There is still no linter.
 - [ ] New/changed functions carry `WHAT:`/`WHY:` comments; constants named, no magic numbers.
 - [ ] Every new `fetch` has a timeout; every multi-table write is in a transaction.
 - [ ] stdout/stderr contract intact (grep your diff for `console.log` outside the summary line).
@@ -359,6 +359,37 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
+
+### The publish-gap instrument (added 2026-07-30, ADR-0001 amendment)
+
+`src/publish-drift.ts` answers "is what we ship still what we have?" by comparing the local
+`public = 1` count against the article count **inside the published npm tarball** — it
+downloads it, extracts `build/knowledge-public.db`, and counts rows. It runs as check #4 of
+`npm run freshness`; `npm run publish-drift` is `freshness --only publish_gap`.
+
+- **The comparator is `public = 1`, never `COUNT(*)`.** 471 local vs 178 published is the
+  gate working; only 178-vs-178 is a real comparison. Comparing totals would report a
+  permanent ~293-row "gap", and an alert that always fires gets muted.
+- **A failed measurement reports `null`, never `0`,** and fires a warning about its own
+  blindness. `content_measured: false` and `articles_delta: 0` must never be confusable.
+- Measurements are cached in `ecosystem_snapshots.metrics` keyed by published version —
+  safe because npm versions are immutable — so the 4.7 MB download happens once per
+  release. `--skip-tarball` reports from cache without fetching.
+- Only a **positive** delta alerts. A negative one is the normal state of a fresh clone,
+  where `data/knowledge.db` is the older git-tracked copy.
+
+→ **Rule: `getSnapshot`/`upsertSnapshot` and the `ecosystem_snapshots` DDL now live ONLY in
+`knowledge-db.ts`.** `freshness.ts` used to carry a second copy of all three; do not
+reintroduce one (Mistake #8). `runMigrations()` is exported so tests build fixtures from the
+real schema rather than a fourth copy.
+
+### Tests exist now
+
+`npm test` runs `node:test` through tsx — no test framework dependency, and `test/` is
+outside `tsconfig.json`'s `rootDir`, so it never reaches `dist/`. The compile gate is no
+longer the only gate; a change to `publish-drift.ts` or the snapshot helpers should come
+with a test. Note this supersedes the older "there are no tests or linter yet" line in the
+quality bar below.
 
 ## The MCPB bundle (added 2026-07-30)
 

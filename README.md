@@ -175,6 +175,7 @@ npm install
 | Script | Description |
 |--------|-------------|
 | `npm run build` | Compile TypeScript |
+| `npm test` | Run the test suite (node:test via tsx) |
 | `npm run dev` | Run MCP server in dev mode (tsx) |
 | `npm start` | Run compiled MCP server |
 | `npm run ingest` | Rebuild knowledge.db from local markdown (requires Ollama) |
@@ -185,6 +186,7 @@ npm install
 | `npm run daily-report` | Generate AEO analytics report |
 | `npm run alerts` | Run content gap alert checks |
 | `npm run freshness` | Check for stale content and ecosystem version changes |
+| `npm run publish-drift` | Compare local publishable content against what npm actually serves |
 | `npm run citation-test` | Manual AI citation testing |
 | `npm run related` | Generate internal article links via vector similarity |
 
