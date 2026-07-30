@@ -57,14 +57,41 @@ const PACK_TIMEOUT_MS = 300_000;
 //       the artifact's structure change without a commit here saying so.
 const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
 
-// WHAT: Platform-correct executable names for npm and npx.
-// WHY:  On Windows both are `.cmd` shims. execFile does not spawn a shell, so
-//       execFile("npm", …) fails with ENOENT there — which would break the
-//       win32 matrix job while every other platform passed. Resolved here rather
-//       than by enabling a shell, since shell:true would reintroduce the quoting
-//       and injection surface this script deliberately avoids.
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
-const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
+// WHAT: How to invoke npm without going through a shell.
+// WHY:  On Windows `npm` and `npx` are `.cmd` shims, and since the fix for
+//       CVE-2024-27980 Node REFUSES to spawn .cmd/.bat without a shell — it
+//       throws `spawn EINVAL`. That is exactly how the win32 matrix leg failed on
+//       its first run while all three POSIX legs passed. Naming `npm.cmd`
+//       explicitly was necessary but not sufficient.
+//
+//       The fix is to skip the shim: npm sets `npm_execpath` to the absolute path
+//       of `npm-cli.js` for any script it runs, so `node <npm-cli.js> …` reaches
+//       npm directly. No shell, so the quoting and injection surface that
+//       shell:true would reintroduce stays closed, and it is identical on every
+//       platform.
+//
+//       Fallback covers running this file directly (tsx src/build-mcpb.ts) rather
+//       than via `npm run`, where npm_execpath is unset. That path still works on
+//       POSIX; on Windows it will EINVAL, hence the explicit guidance.
+const NPM_CLI_JS =
+  process.env.npm_execpath && process.env.npm_execpath.endsWith(".js")
+    ? process.env.npm_execpath
+    : null;
+
+// WHAT: Build the (command, prefix-args) pair for an npm invocation.
+// WHY:  One definition so `npm pack`, `npm ci` and `npm exec` cannot diverge in
+//       how they reach npm — a second copy is a second place to regress.
+function npmInvocation(args: string[]): { cmd: string; argv: string[] } {
+  if (NPM_CLI_JS) return { cmd: process.execPath, argv: [NPM_CLI_JS, ...args] };
+  if (process.platform === "win32") {
+    fail(
+      "npm_execpath is unset on Windows, so npm cannot be spawned without a shell " +
+        "(Node refuses .cmd since CVE-2024-27980). Run this through `npm run build-mcpb` " +
+        "rather than invoking the script directly."
+    );
+  }
+  return { cmd: "npm", argv: args };
+}
 // WHY: tar is a real executable on every supported runner (Windows 10+ ships
 //      bsdtar as tar.exe), so no .cmd shim dance is needed — but it is named
 //      here rather than inlined, for the same reason npm and npx are.
@@ -202,11 +229,16 @@ async function main(): Promise<void> {
 
   if (FLAGS.fromNpm) {
     console.error(`  Sourcing content from npm: mcp-astgl-knowledge@${FLAGS.fromNpm}`);
-    await EXEC_FILE_ASYNC(
-      NPM,
-      ["pack", `mcp-astgl-knowledge@${FLAGS.fromNpm}`, "--pack-destination", STAGE],
-      { cwd: STAGE, timeout: NPM_CI_TIMEOUT_MS }
-    );
+    const packCall = npmInvocation([
+      "pack",
+      `mcp-astgl-knowledge@${FLAGS.fromNpm}`,
+      "--pack-destination",
+      STAGE,
+    ]);
+    await EXEC_FILE_ASYNC(packCall.cmd, packCall.argv, {
+      cwd: STAGE,
+      timeout: NPM_CI_TIMEOUT_MS,
+    });
     const tgz = join(STAGE, `mcp-astgl-knowledge-${FLAGS.fromNpm}.tgz`);
     if (!existsSync(tgz)) fail(`npm pack produced no tarball for ${FLAGS.fromNpm}`);
     // --strip-components=1 unwraps the tarball's "package/" prefix so the stage
@@ -282,7 +314,8 @@ async function main(): Promise<void> {
   // WHY: --omit=dev keeps typescript/tsx out of a distributed artifact. `npm ci`
   //      rather than `npm install` so the tree matches the committed lockfile.
   console.error("\n  Installing production dependencies into the stage…");
-  await EXEC_FILE_ASYNC(NPM, ["ci", "--omit=dev"], {
+  const ciCall = npmInvocation(["ci", "--omit=dev"]);
+  await EXEC_FILE_ASYNC(ciCall.cmd, ciCall.argv, {
     cwd: STAGE,
     timeout: NPM_CI_TIMEOUT_MS,
   });
@@ -297,11 +330,21 @@ async function main(): Promise<void> {
   rmSync(outFile, { force: true });
 
   console.error("  Packing…");
-  const { stdout } = await EXEC_FILE_ASYNC(
-    NPX,
-    ["--yes", MCPB_CLI, "pack", STAGE, outFile],
-    { cwd: ROOT, timeout: PACK_TIMEOUT_MS }
-  );
+  // WHY: `npm exec` rather than `npx` — same reasoning as above, and it reuses
+  //       the single npmInvocation path instead of adding a second shim to dodge.
+  const packerCall = npmInvocation([
+    "exec",
+    "--yes",
+    "--",
+    MCPB_CLI,
+    "pack",
+    STAGE,
+    outFile,
+  ]);
+  const { stdout } = await EXEC_FILE_ASYNC(packerCall.cmd, packerCall.argv, {
+    cwd: ROOT,
+    timeout: PACK_TIMEOUT_MS,
+  });
 
   rmSync(STAGE, { recursive: true, force: true });
 
