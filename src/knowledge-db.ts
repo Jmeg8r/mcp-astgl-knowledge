@@ -37,7 +37,11 @@ export function initKnowledgeDb(): InstanceType<typeof Database> {
 
 // WHAT: Add new columns and tables needed by the structuring pipeline
 // WHY: ALTER TABLE with try/catch is idempotent — safe to re-run after ingest.ts rebuilds
-function runMigrations(database: InstanceType<typeof Database>): void {
+//      Exported so tests can build a fixture database from the canonical schema.
+//      A test that re-declared these tables would be a second definition of them,
+//      which is the drift this consolidation exists to remove (Mistake #8).
+//      Callers must have an `articles` table already — the indexes below assume it.
+export function runMigrations(database: InstanceType<typeof Database>): void {
   const alterColumns = [
     "ALTER TABLE articles ADD COLUMN source_url TEXT",
     "ALTER TABLE articles ADD COLUMN content_type TEXT DEFAULT 'article'",
@@ -123,9 +127,23 @@ function runMigrations(database: InstanceType<typeof Database>): void {
       current_version TEXT NOT NULL,
       previous_version TEXT,
       checked_at TEXT NOT NULL,
+      metrics TEXT,
       UNIQUE(check_type, package_name)
     )
   `);
+  try {
+    // WHAT: Free-form JSON measured alongside a version.
+    // WHY:  The publish-gap check (publish-drift.ts) records what the PUBLISHED
+    //       artifact actually contains — article and chunk counts read out of the
+    //       registry tarball — not just its version string. npm versions are
+    //       immutable, so a measurement keyed by version never goes stale and the
+    //       75 MB tarball is fetched once per release rather than once per run.
+    //       Separate ALTER because the CREATE above is IF NOT EXISTS: databases
+    //       predating this column would otherwise never gain it.
+    database.exec("ALTER TABLE ecosystem_snapshots ADD COLUMN metrics TEXT");
+  } catch {
+    // Column already exists — expected after first run
+  }
 
   // WHAT: Idea journal for capturing content opportunities
   // WHY: Surfaces content gaps from query analytics and manual brainstorming
@@ -178,6 +196,87 @@ function runMigrations(database: InstanceType<typeof Database>): void {
   database.exec(
     "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_article ON rewrite_jobs(article_url)"
   );
+}
+
+// --- Ecosystem Snapshots ---
+// WHAT: Last-known version (and optional measured metrics) per tracked package.
+// WHY:  freshness.ts polls npm and GitHub; publish-drift.ts polls this package's
+//       own registry entry. All three need identical read/write semantics against
+//       one table, and freshness.ts previously carried its own copy of the DDL and
+//       both helpers. Two definitions of a table is Mistake #8 waiting to happen,
+//       so the table is declared once in runMigrations() and accessed only here.
+
+export interface EcosystemSnapshot {
+  current_version: string;
+  previous_version: string | null;
+  checked_at: string;
+  metrics: string | null;
+}
+
+export function getSnapshot(
+  database: InstanceType<typeof Database>,
+  checkType: string,
+  packageName: string
+): EcosystemSnapshot | undefined {
+  return database
+    .prepare(
+      `SELECT current_version, previous_version, checked_at, metrics
+       FROM ecosystem_snapshots
+       WHERE check_type = ? AND package_name = ?`
+    )
+    .get(checkType, packageName) as EcosystemSnapshot | undefined;
+}
+
+// WHAT: Record the version seen now, rotating the old value into previous_version.
+// WHY:  The version transition is what callers alert on. `metrics` is optional and
+//       COALESCE-preserved when omitted, so a caller that only knows the version
+//       cannot null out a measurement another caller took (the repo's upsert rule).
+export function upsertSnapshot(
+  database: InstanceType<typeof Database>,
+  checkType: string,
+  packageName: string,
+  version: string,
+  metrics?: string | null
+): void {
+  const existing = getSnapshot(database, checkType, packageName);
+  const now = new Date().toISOString();
+
+  if (!existing) {
+    database
+      .prepare(
+        `INSERT INTO ecosystem_snapshots
+           (check_type, package_name, current_version, checked_at, metrics)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(checkType, packageName, version, now, metrics ?? null);
+    return;
+  }
+
+  if (existing.current_version !== version) {
+    // WHY: A new version invalidates any metrics measured against the old one.
+    //      Passing no metrics here must CLEAR them rather than preserve them —
+    //      stale counts attributed to the wrong version is exactly the false
+    //      reading this instrument exists to prevent.
+    database
+      .prepare(
+        `UPDATE ecosystem_snapshots
+         SET previous_version = current_version,
+             current_version = ?,
+             checked_at = ?,
+             metrics = ?
+         WHERE check_type = ? AND package_name = ?`
+      )
+      .run(version, now, metrics ?? null, checkType, packageName);
+    return;
+  }
+
+  database
+    .prepare(
+      `UPDATE ecosystem_snapshots
+       SET checked_at = ?, metrics = COALESCE(?, metrics)
+       WHERE check_type = ? AND package_name = ?`
+    )
+    .run(now, metrics ?? null, checkType, packageName);
 }
 
 // WHAT: Shared "which articles are stale?" query.
