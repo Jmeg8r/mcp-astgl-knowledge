@@ -409,9 +409,19 @@ carry content the npm package does not.
   then smoke-tests the extracted bundle with a real MCP handshake. `list_tags` is the chosen
   probe because it is the non-vector path, proving the native binary loaded without a model.
 - `fail-fast: false`, so a broken prebuild on one platform still yields the others.
-- Cross-platform gotcha already handled: on Windows `npm`/`npx` are `.cmd` shims and
-  `execFile` finds neither, so `build-mcpb.ts` resolves `npm.cmd`/`npx.cmd` there rather than
-  enabling a shell (which would reintroduce a quoting/injection surface).
+- Cross-platform gotcha, found by the first matrix run: on Windows `npm`/`npx` are `.cmd`
+  shims, and since the fix for **CVE-2024-27980** Node *refuses* to spawn `.cmd`/`.bat`
+  without a shell — it throws `spawn EINVAL`. Naming `npm.cmd` explicitly was necessary but
+  NOT sufficient; the win32 leg failed while all three POSIX legs passed. `build-mcpb.ts`
+  now skips the shim entirely: npm sets `npm_execpath` to the absolute path of `npm-cli.js`
+  for any script it runs, so the script invokes `node <npm-cli.js> …` — no shell, identical
+  on every platform, and `shell: true` (with its quoting surface) stays off the table.
+  **Consequence: run it via `npm run build-mcpb`. Direct `tsx src/build-mcpb.ts` execution is
+  unsupported on EVERY platform** — `npm_execpath` is only set for npm-run scripts, and the
+  script now fails uniformly rather than working on POSIX and breaking on win32. A fallback
+  that succeeded on three platforms and failed on the one you cannot test locally is worse
+  than no fallback. (`npx tsx …` happens to work because npx sets the variable itself, but
+  do not rely on that.)
 - Workflow injection: every `${{ }}` value reaching a `run:` block goes through `env:` and is
   referenced as a quoted shell variable, and the resolved version is semver-validated before
   it touches npm or a filename.

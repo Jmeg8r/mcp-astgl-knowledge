@@ -49,6 +49,14 @@ jobs:
   bundle:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # WHY: A hard job ceiling, because the in-script execFile timeouts proved
+    #      insufficient — the darwin-arm64 leg of run 30538480425 sat in the Build
+    #      step for over an hour against a 195-second baseline, despite 5-minute
+    #      timeouts on every subprocess. execFile's timeout kills the direct child,
+    #      but npm spawns grandchildren that can hold stdio open, so the promise
+    #      never settles and nothing terminates the step. Without this, GitHub's
+    #      360-minute default applies — on macOS runners, billed at 10x.
+    timeout-minutes: 25
     strategy:
       # WHY: fail-fast off so one platform's failure still yields the others —
       #      a broken Windows prebuild should not withhold a working macOS bundle.

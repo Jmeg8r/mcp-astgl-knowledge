@@ -34,7 +34,7 @@ import {
   readFileSync,
   statSync,
 } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { createHash } from "crypto";
 import Database from "better-sqlite3";
 
@@ -52,22 +52,79 @@ const MANIFEST = join(ROOT, "mcpb", "manifest.json");
 const NPM_CI_TIMEOUT_MS = 300_000;
 const PACK_TIMEOUT_MS = 300_000;
 
-// WHAT: Pinned packer version.
-// WHY:  The bundle format is versioned; letting npx float to @latest would let
-//       the artifact's structure change without a commit here saying so.
-const MCPB_CLI = "@anthropic-ai/mcpb@2.1.2";
+// WHAT: Path to the packer's CLI entry point, resolved from node_modules.
+// WHY:  It is a pinned devDependency, invoked directly with node rather than
+//       fetched at build time. Three reasons, in order of how much they cost:
+//       (1) `npm exec --yes -- @anthropic-ai/mcpb pack` HUNG for 60 minutes on
+//           the darwin-arm64 runner of run 30538480425 — npm ci had finished in
+//           27s, then nothing, and the job log ended with two orphaned node
+//           processes holding stdio open so the promise never settled;
+//       (2) it removes a network fetch from the middle of a build; and
+//       (3) it sidesteps the .cmd shim on Windows entirely.
+//       The version stays pinned in package.json, so the artifact's structure
+//       cannot change without a lockfile diff.
+const MCPB_CLI_JS = join(
+  ROOT,
+  "node_modules",
+  "@anthropic-ai",
+  "mcpb",
+  "dist",
+  "cli",
+  "cli.js"
+);
 
-// WHAT: Platform-correct executable names for npm and npx.
-// WHY:  On Windows both are `.cmd` shims. execFile does not spawn a shell, so
-//       execFile("npm", …) fails with ENOENT there — which would break the
-//       win32 matrix job while every other platform passed. Resolved here rather
-//       than by enabling a shell, since shell:true would reintroduce the quoting
-//       and injection surface this script deliberately avoids.
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
-const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
+// --- npm invocation ---
+
+// WHAT: How to invoke npm without going through a shell.
+// WHY:  On Windows `npm` and `npx` are `.cmd` shims, and since the fix for
+//       CVE-2024-27980 Node REFUSES to spawn .cmd/.bat without a shell — it
+//       throws `spawn EINVAL`. That is exactly how the win32 matrix leg failed on
+//       its first run while all three POSIX legs passed. Naming `npm.cmd`
+//       explicitly was necessary but not sufficient.
+//
+//       The fix is to skip the shim: npm sets `npm_execpath` to the absolute path
+//       of `npm-cli.js` for any script it runs, so `node <npm-cli.js> …` reaches
+//       npm directly. No shell, so the quoting and injection surface that
+//       shell:true would reintroduce stays closed, and it is identical on every
+//       platform.
+//
+//       Fallback covers running this file directly (tsx src/build-mcpb.ts) rather
+//       than via `npm run`, where npm_execpath is unset. That path still works on
+//       POSIX; on Windows it will EINVAL, hence the explicit guidance.
+// WHY: npm_execpath is INJECTED BY npm, not configured by an operator — it is
+//      deliberately absent from .env.example, because documenting it there would
+//      invite someone to set it by hand, which would point this script at the
+//      wrong npm. Normalized to "" so the endsWith check needs no guard.
+const NPM_EXECPATH = process.env.npm_execpath || "";
+const NPM_CLI_JS = NPM_EXECPATH.endsWith(".js") ? NPM_EXECPATH : null;
+
+// WHAT: Build the (command, prefix-args) pair for an npm invocation.
+// WHY:  One definition so `npm pack` and `npm ci` cannot diverge in how they
+//       reach npm — a second copy is a second place to regress. (The packer no
+//       longer goes through npm at all; it is a pinned devDependency invoked
+//       directly, after `npm exec` hung for 60 minutes on darwin-arm64.)
+function npmInvocation(args: string[]): { cmd: string; argv: string[] } {
+  if (!NPM_CLI_JS) {
+    // WHY: Fails on EVERY platform, not just Windows. A fallback that worked on
+    //      POSIX and failed on win32 meant the supported path was ambiguous —
+    //      someone could develop against a bare-`npm` code path that does not
+    //      exist in CI, and only discover it on the one platform they cannot
+    //      test locally. Uniform failure beats platform-dependent success.
+    fail(
+      "npm_execpath is unavailable, so npm cannot be invoked without a shell " +
+        "(Node refuses .cmd since CVE-2024-27980, and shell:true would reintroduce " +
+        "a quoting surface). Run `npm run build-mcpb` — direct `tsx src/build-mcpb.ts` " +
+        "execution is unsupported."
+    );
+  }
+  return { cmd: process.execPath, argv: [NPM_CLI_JS, ...args] };
+}
 // WHY: tar is a real executable on every supported runner (Windows 10+ ships
 //      bsdtar as tar.exe), so no .cmd shim dance is needed — but it is named
-//      here rather than inlined, for the same reason npm and npx are.
+//      here rather than inlined, for the same reason the npm entry point is.
+//      Note WHICH tar answers differs by runner: GitHub's windows images resolve
+//      to Git-for-Windows' GNU tar ahead of bsdtar, which is why the extract call
+//      passes a relative filename (see the --from-npm branch).
 const TAR = "tar";
 
 // WHAT: Bytes per mebibyte, for human-readable size reporting.
@@ -202,16 +259,29 @@ async function main(): Promise<void> {
 
   if (FLAGS.fromNpm) {
     console.error(`  Sourcing content from npm: mcp-astgl-knowledge@${FLAGS.fromNpm}`);
-    await EXEC_FILE_ASYNC(
-      NPM,
-      ["pack", `mcp-astgl-knowledge@${FLAGS.fromNpm}`, "--pack-destination", STAGE],
-      { cwd: STAGE, timeout: NPM_CI_TIMEOUT_MS }
-    );
+    const packCall = npmInvocation([
+      "pack",
+      `mcp-astgl-knowledge@${FLAGS.fromNpm}`,
+      "--pack-destination",
+      STAGE,
+    ]);
+    await EXEC_FILE_ASYNC(packCall.cmd, packCall.argv, {
+      cwd: STAGE,
+      timeout: NPM_CI_TIMEOUT_MS,
+    });
     const tgz = join(STAGE, `mcp-astgl-knowledge-${FLAGS.fromNpm}.tgz`);
     if (!existsSync(tgz)) fail(`npm pack produced no tarball for ${FLAGS.fromNpm}`);
-    // --strip-components=1 unwraps the tarball's "package/" prefix so the stage
-    // layout matches a local build exactly.
-    await EXEC_FILE_ASYNC(TAR, ["-xzf", tgz, "-C", STAGE, "--strip-components=1"], {
+    // WHAT: Extract using a RELATIVE filename, with the stage as cwd.
+    // WHY:  An absolute Windows path breaks here. GitHub's windows runners put
+    //       Git-for-Windows' GNU tar ahead of Windows' own bsdtar on PATH, and GNU
+    //       tar reads `D:\path` as a remote host spec (scp-style `host:path`) —
+    //       it tried to connect to a machine called "D" and failed with
+    //       "Cannot connect to D: resolve failed". `--force-local` would fix GNU
+    //       tar but is unsupported by bsdtar, so it would break macOS instead.
+    //       Passing only a basename removes the colon, which works with both.
+    //       --strip-components=1 unwraps the tarball's "package/" prefix so the
+    //       stage layout matches a local build exactly.
+    await EXEC_FILE_ASYNC(TAR, ["-xzf", basename(tgz), "--strip-components=1"], {
       cwd: STAGE,
       timeout: PACK_TIMEOUT_MS,
     });
@@ -282,7 +352,8 @@ async function main(): Promise<void> {
   // WHY: --omit=dev keeps typescript/tsx out of a distributed artifact. `npm ci`
   //      rather than `npm install` so the tree matches the committed lockfile.
   console.error("\n  Installing production dependencies into the stage…");
-  await EXEC_FILE_ASYNC(NPM, ["ci", "--omit=dev"], {
+  const ciCall = npmInvocation(["ci", "--omit=dev"]);
+  await EXEC_FILE_ASYNC(ciCall.cmd, ciCall.argv, {
     cwd: STAGE,
     timeout: NPM_CI_TIMEOUT_MS,
   });
@@ -297,9 +368,15 @@ async function main(): Promise<void> {
   rmSync(outFile, { force: true });
 
   console.error("  Packing…");
+  if (!existsSync(MCPB_CLI_JS)) {
+    fail(
+      `packer not found at ${MCPB_CLI_JS} — run 'npm ci' in the repo first ` +
+        `(@anthropic-ai/mcpb is a pinned devDependency, no longer fetched at build time)`
+    );
+  }
   const { stdout } = await EXEC_FILE_ASYNC(
-    NPX,
-    ["--yes", MCPB_CLI, "pack", STAGE, outFile],
+    process.execPath,
+    [MCPB_CLI_JS, "pack", STAGE, outFile],
     { cwd: ROOT, timeout: PACK_TIMEOUT_MS }
   );
 
