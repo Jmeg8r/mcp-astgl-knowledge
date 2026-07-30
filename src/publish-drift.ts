@@ -620,8 +620,16 @@ export function buildPublishGapAlert(drift: PublishDrift): PublishGapAlert | nul
     articlesDelta >= ARTICLE_DELTA_CRITICAL ||
     (daysSince != null && daysSince >= STALE_PUBLISH_DAYS_CRITICAL && articlesDelta > 0);
 
+  // WHAT: Name what actually triggered the alert.
+  // WHY:  unreleasedBump fires regardless of the delta's sign, so the article
+  //       phrasing would announce "0 article(s) ready but unpublished" — or a
+  //       negative count — for an alert that is really about a version bump nobody
+  //       published. An alert that misdescribes its own trigger costs the reader
+  //       the time it was meant to save.
   const headline =
-    `${drift.package}: ${articlesDelta} article(s) ready but unpublished` +
+    (unreleasedBump && articlesDelta <= 0
+      ? `${drift.package}: v${drift.local_version} prepared but never published (registry still on ${drift.published_version})`
+      : `${drift.package}: ${articlesDelta} article(s) ready but unpublished`) +
     (daysSince != null ? `, ${daysSince}d since last release` : "");
 
   return {

@@ -27,6 +27,7 @@ import {
   extractTarMember,
   publishGapAlertKey,
   readLocalPublicState,
+  readLocalVersion,
   runPublishGapCheck,
   PUBLISH_GAP_CHECK_TYPE,
 } from "../src/publish-drift.js";
@@ -260,6 +261,17 @@ describe("buildPublishGapAlert", () => {
     const alert = buildPublishGapAlert(drift({ local_version: "1.4.0" }));
     assert.ok(alert);
     assert.match(alert.details, /version bump was prepared and never published/);
+    // WHY: This trigger ignores the delta's sign, so the article phrasing would
+    //      announce "0 article(s) ready but unpublished" — an alert misdescribing
+    //      what set it off.
+    assert.match(alert.title, /v1\.4\.0 prepared but never published/);
+    assert.doesNotMatch(alert.title, /0 article\(s\)/);
+  });
+
+  test("headline names articles when the delta is what triggered it", () => {
+    const alert = buildPublishGapAlert(drift({ local: local({ public_articles: 190 }) }));
+    assert.ok(alert);
+    assert.match(alert.title, /12 article\(s\) ready but unpublished/);
   });
 
   test("does NOT fire when the registry is merely ahead of this checkout", () => {
@@ -569,22 +581,33 @@ describe("failure reasons survive the round trip", () => {
   // WHAT: Stand in for the registry, then the tarball CDN.
   // WHY:  runPublishGapCheck makes exactly two calls — packument, then tarball —
   //       so dispatching on the URL covers both legs without a network.
+  // WHY: `legs` records which requests actually happened. Without it, a future
+  //       fixture change that pre-seeded a snapshot would make
+  //       readCachedMeasurement short-circuit, and these tests would keep passing
+  //       while silently no longer covering the tarball path — a test that stops
+  //       testing is the same false green this whole module is about.
   function stubFetch(handlers: {
     packument?: () => Response;
     tarball?: () => Response;
-  }): () => void {
+  }): { restore: () => void; legs: string[] } {
     const original = globalThis.fetch;
+    const legs: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith(".tgz")) {
+        legs.push("tarball");
         if (!handlers.tarball) throw new Error("unexpected tarball fetch");
         return handlers.tarball();
       }
+      legs.push("packument");
       if (!handlers.packument) throw new Error("unexpected packument fetch");
       return handlers.packument();
     }) as typeof fetch;
-    return () => {
-      globalThis.fetch = original;
+    return {
+      restore: () => {
+        globalThis.fetch = original;
+      },
+      legs,
     };
   }
 
@@ -608,7 +631,7 @@ describe("failure reasons survive the round trip", () => {
   }
 
   test("a tarball with no database is CRITICAL, not a warning", async () => {
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => packumentResponse(),
       tarball: () =>
         new Response(
@@ -625,6 +648,7 @@ describe("failure reasons survive the round trip", () => {
       assert.equal(d.unmeasured_reason, "tarball_member_missing");
       assert.ok(alert);
       assert.equal(alert.severity, "critical");
+      assert.deepEqual(legs, ["packument", "tarball"], "both legs must run");
     } finally {
       restore();
     }
@@ -633,7 +657,7 @@ describe("failure reasons survive the round trip", () => {
   test("an HTTP error from the registry is registry_unreachable, not no_latest", async () => {
     // WHY: Same channel, wrong diagnosis. A 503 reported as "no latest dist-tag"
     //      sends the reader to look for a publishing mistake that did not happen.
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => new Response("upstream boom", { status: 503 }),
     });
     try {
@@ -643,25 +667,27 @@ describe("failure reasons survive the round trip", () => {
       assert.equal(d.unmeasured_reason, "registry_unreachable");
       assert.ok(alert);
       assert.match(alert.details, /could not be reached/);
+      assert.deepEqual(legs, ["packument"], "must not reach for the tarball");
     } finally {
       restore();
     }
   });
 
   test("a 200 with no latest dist-tag really is registry_no_latest", async () => {
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => packumentResponse({ "dist-tags": {} }),
     });
     try {
       const { drift: d } = await withFixtureDb((db) => runPublishGapCheck(db));
       assert.equal(d.unmeasured_reason, "registry_no_latest");
+      assert.deepEqual(legs, ["packument"], "must not reach for the tarball");
     } finally {
       restore();
     }
   });
 
   test("a failed tarball download is tarball_unreachable", async () => {
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => packumentResponse(),
       tarball: () => new Response("nope", { status: 404 }),
     });
@@ -672,6 +698,7 @@ describe("failure reasons survive the round trip", () => {
       assert.equal(d.unmeasured_reason, "tarball_unreachable");
       assert.ok(alert);
       assert.equal(alert.severity, "warning");
+      assert.deepEqual(legs, ["packument", "tarball"], "both legs must run");
     } finally {
       restore();
     }
@@ -695,7 +722,7 @@ describe("failure reasons survive the round trip", () => {
     const dbBytes = readFileSync(pubPath);
     rmSync(publishedDb, { recursive: true, force: true });
 
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => packumentResponse(),
       tarball: () =>
         new Response(tarball(tarMember(TARGET, dbBytes)) as unknown as BodyInit, {
@@ -709,9 +736,12 @@ describe("failure reasons survive the round trip", () => {
           assert.equal(d.published_articles, 1);
           assert.equal(d.published_chunks, 1);
           // Local fixture is empty, so the registry legitimately holds more.
-          assert.equal(d.articles_delta, -1);
+          // Asserted alongside the delta so the arithmetic is self-evident.
+          assert.equal(d.local_public_articles, 0);
+          assert.equal(d.articles_delta, 0 - 1);
+          assert.deepEqual(legs, ["packument", "tarball"], "both legs must run");
 
-          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, "mcp-astgl-knowledge");
+          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, readLocalVersion().name);
           assert.equal(snap?.current_version, "1.3.0");
           assert.ok(snap?.metrics);
           assert.equal(JSON.parse(snap.metrics).articles, 1);
@@ -725,16 +755,17 @@ describe("failure reasons survive the round trip", () => {
   test("a failed measurement records the version WITHOUT metrics", async () => {
     // WHY: The version must still be recorded so the next run can detect a change,
     //      but attaching no metrics keeps a failed read from inheriting counts.
-    const restore = stubFetch({
+    const { restore, legs } = stubFetch({
       packument: () => packumentResponse(),
       tarball: () => new Response("nope", { status: 500 }),
     });
     try {
       await withFixtureDb((db) =>
         runPublishGapCheck(db).then(() => {
-          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, "mcp-astgl-knowledge");
+          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, readLocalVersion().name);
           assert.equal(snap?.current_version, "1.3.0");
           assert.equal(snap?.metrics, null);
+          assert.deepEqual(legs, ["packument", "tarball"], "both legs must run");
         })
       );
     } finally {
