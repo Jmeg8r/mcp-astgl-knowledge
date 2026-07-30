@@ -541,6 +541,16 @@ function parseArgs(): Flags {
       process.exit(1);
     }
     const requested = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    // WHY: `--only ,` or `--only " "` reduces to an empty list, which then passes
+    //      the unknown-name check vacuously and runs ZERO checks while exiting 0 —
+    //      the silent no-op this validation exists to prevent, arrived at from the
+    //      other direction.
+    if (requested.length === 0) {
+      console.error(
+        `--only requires at least one check name. Valid: ${ALL_CHECKS.join(", ")}`
+      );
+      process.exit(1);
+    }
     const unknown = requested.filter(
       (name) => !(ALL_CHECKS as readonly string[]).includes(name)
     );

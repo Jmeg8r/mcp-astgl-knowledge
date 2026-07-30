@@ -114,6 +114,25 @@ export type UnmeasuredReason =
 
 export type VersionState = "in_sync" | "local_ahead" | "local_behind" | "unknown";
 
+// WHAT: An error that carries the UnmeasuredReason it maps to.
+// WHY:  The reason drives the alert's SEVERITY, so deriving it by substring-matching
+//       a human-readable message couples that severity to prose. It did break:
+//       the mapping tested for "no build/knowledge-public.db" while the message
+//       interpolated the full member path ("...has no package/build/..."), so
+//       `tarball_member_missing` was unreachable and a package published without
+//       its database would have alerted as a warning ("could not be opened")
+//       instead of critical. Carrying the reason on the error means a message edit
+//       can never re-break it.
+export class MeasurementError extends Error {
+  constructor(
+    message: string,
+    readonly reason: UnmeasuredReason
+  ) {
+    super(message);
+    this.name = "MeasurementError";
+  }
+}
+
 export interface RegistryState {
   version: string;
   published_at: string | null;
@@ -274,7 +293,15 @@ export async function fetchRegistryState(
 
   if (!resp.ok) {
     console.error(`  npm registry returned ${resp.status} for ${packageName}`);
-    return null;
+    // WHY: An HTTP failure means "could not reach the registry", not "the registry
+    //      has no latest tag". Returning null here would make the caller report
+    //      registry_no_latest and tell the reader a 503 was a missing dist-tag —
+    //      the same channel carrying the wrong diagnosis. Throwing routes it to
+    //      the registry_unreachable branch, which is what actually happened.
+    throw new MeasurementError(
+      `npm registry returned ${resp.status}`,
+      "registry_unreachable"
+    );
   }
 
   const doc = (await resp.json()) as {
@@ -389,7 +416,10 @@ export async function measurePublishedContent(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!resp.ok) {
-    throw new Error(`tarball fetch returned ${resp.status}`);
+    throw new MeasurementError(
+      `tarball fetch returned ${resp.status}`,
+      "tarball_unreachable"
+    );
   }
 
   const gzipped = Buffer.from(await resp.arrayBuffer());
@@ -398,7 +428,10 @@ export async function measurePublishedContent(
     // WHY: A published package with no database is a real defect worth surfacing —
     //      exactly the `npm pack` incident CLAUDE.md records, where a 145 kB tarball
     //      shipped with the `files` entry pointing at a missing path.
-    throw new Error(`published tarball has no ${TARBALL_DB_MEMBER}`);
+    throw new MeasurementError(
+      `published tarball has no ${TARBALL_DB_MEMBER}`,
+      "tarball_member_missing"
+    );
   }
 
   // WHY: better-sqlite3 opens paths, not buffers, so the extracted bytes are staged
@@ -561,12 +594,25 @@ export function buildPublishGapAlert(drift: PublishDrift): PublishGapAlert | nul
   //       reported in the JSON summary, where a real local content loss would
   //       show up as a large negative on the machine that actually publishes.
   const contentGap = articlesDelta >= ARTICLE_DELTA_WARNING;
-  const unreleasedBump = drift.version_state === "local_ahead";
-  const registryAhead = drift.version_state === "local_behind";
   const staleWithDrift =
     daysSince != null && daysSince >= STALE_PUBLISH_DAYS_WARNING && articlesDelta > 0;
 
-  if (!contentGap && !unreleasedBump && !registryAhead && !staleWithDrift) {
+  // WHAT: A version bump sitting unpublished IS a publish gap, so it alerts on its
+  //       own even with no content delta.
+  // WHY:  "A release was prepared and forgotten" is precisely the failure mode
+  //       ADR-0001 documents, and it clears the moment someone publishes.
+  const unreleasedBump = drift.version_state === "local_ahead";
+
+  // WHAT: The registry being AHEAD of this checkout is reported, never alerted.
+  // WHY:  It is the normal state of any stale branch, fresh clone, or CI runner —
+  //       nothing is waiting to be published *from here*, and unlike an unreleased
+  //       bump it does not clear by publishing. Alerting would fire every run on
+  //       every non-publishing checkout and train the reader to mute the channel,
+  //       which is the failure this instrument exists to prevent. Same reasoning as
+  //       the negative-delta rule above; `version_state` still carries the fact.
+  const registryAhead = drift.version_state === "local_behind";
+
+  if (!contentGap && !unreleasedBump && !staleWithDrift) {
     return null;
   }
 
@@ -574,10 +620,9 @@ export function buildPublishGapAlert(drift: PublishDrift): PublishGapAlert | nul
     articlesDelta >= ARTICLE_DELTA_CRITICAL ||
     (daysSince != null && daysSince >= STALE_PUBLISH_DAYS_CRITICAL && articlesDelta > 0);
 
-  const headline = registryAhead
-    ? `${drift.package}: registry is AHEAD of this checkout (${drift.published_version} published, ${drift.local_version} local)`
-    : `${drift.package}: ${articlesDelta} article(s) ready but unpublished` +
-      (daysSince != null ? `, ${daysSince}d since last release` : "");
+  const headline =
+    `${drift.package}: ${articlesDelta} article(s) ready but unpublished` +
+    (daysSince != null ? `, ${daysSince}d since last release` : "");
 
   return {
     type: "publish_gap",
@@ -601,7 +646,7 @@ export function buildPublishGapAlert(drift: PublishDrift): PublishGapAlert | nul
         ? `Note: package.json is at ${drift.local_version} but the registry serves ${drift.published_version} — a version bump was prepared and never published.`
         : "",
       registryAhead
-        ? "Note: the registry is ahead of this checkout. Someone published from elsewhere, or this branch is behind main."
+        ? `Note: the registry (${drift.published_version}) is ahead of this checkout (${drift.local_version}). Someone published from elsewhere, or this branch is behind main — the delta above is measured against a stale package.json.`
         : "",
       "",
       "Action: run `npm publish` (prepack re-runs build → reclassify → prune), or",
@@ -698,11 +743,14 @@ export async function runPublishGapCheck(
 
   try {
     registry = await fetchRegistryState(name);
+    // WHY: null now means ONLY "responded, but carried no latest dist-tag".
+    //      Transport and HTTP failures throw and are labelled below.
     if (!registry) reason = "registry_no_latest";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`  registry poll failed for ${name}: ${message}`);
-    reason = "registry_unreachable";
+    reason =
+      err instanceof MeasurementError ? err.reason : "registry_unreachable";
   }
 
   if (registry) {
@@ -720,11 +768,11 @@ export async function runPublishGapCheck(
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`  published measurement failed: ${message}`);
-          reason = message.includes("no build/knowledge-public.db")
-            ? "tarball_member_missing"
-            : message.includes("fetch returned")
-              ? "tarball_unreachable"
-              : "tarball_unreadable";
+          // WHY: Read the reason off the error rather than re-deriving it from the
+          //      message text. Anything without a typed reason genuinely is an
+          //      unexpected read failure.
+          reason =
+            err instanceof MeasurementError ? err.reason : "tarball_unreadable";
         }
       }
     }

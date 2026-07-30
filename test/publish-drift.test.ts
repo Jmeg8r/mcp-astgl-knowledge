@@ -15,7 +15,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "zlib";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import Database from "better-sqlite3";
@@ -27,6 +27,7 @@ import {
   extractTarMember,
   publishGapAlertKey,
   readLocalPublicState,
+  runPublishGapCheck,
   PUBLISH_GAP_CHECK_TYPE,
 } from "../src/publish-drift.js";
 import type {
@@ -261,10 +262,23 @@ describe("buildPublishGapAlert", () => {
     assert.match(alert.details, /version bump was prepared and never published/);
   });
 
-  test("fires when the registry is ahead of this checkout", () => {
-    const alert = buildPublishGapAlert(drift({ local_version: "1.2.0" }));
+  test("does NOT fire when the registry is merely ahead of this checkout", () => {
+    // WHY: local_behind is the normal state of any stale branch, fresh clone, or
+    //      CI runner — nothing is waiting to be published from here, and unlike an
+    //      unreleased bump it does not clear by publishing. Alerting would fire
+    //      every run on every non-publishing checkout. Reported, never alerted.
+    const d = drift({ local_version: "1.2.0" });
+    assert.equal(d.version_state, "local_behind", "the fact is still reported");
+    assert.equal(buildPublishGapAlert(d), null);
+  });
+
+  test("notes a registry-ahead checkout when some other condition fires", () => {
+    const alert = buildPublishGapAlert(
+      drift({ local_version: "1.2.0", local: local({ public_articles: 200 }) })
+    );
     assert.ok(alert);
-    assert.match(alert.title, /registry is AHEAD/);
+    assert.match(alert.details, /is ahead of this checkout/);
+    assert.match(alert.details, /measured against a stale package\.json/);
   });
 
   test("ALWAYS alerts when the comparison could not be made", () => {
@@ -512,6 +526,220 @@ describe("snapshot cache semantics", () => {
         "1.12.1"
       );
     });
+  });
+});
+
+// --- Failure-reason wiring (regression cover) ---
+// WHY: The pure-alert tests above hand-construct a drift object with the reason
+//      ALREADY set, so they verify the shape and never the wiring. That gap let a
+//      real defect through: the reason was derived by substring-matching the thrown
+//      message, and the match never fired, so `tarball_member_missing` was
+//      unreachable and a database-less package downgraded from critical to warning.
+//      These tests drive runPublishGapCheck through a stubbed registry so the
+//      error → reason → severity path is exercised for real.
+
+describe("failure reasons survive the round trip", () => {
+  const TARGET = "package/build/knowledge-public.db";
+
+  // WHY: async-aware — a synchronous `finally` would close the database before the
+  //      awaited callback resolved, and every assertion would fail on a closed
+  //      connection rather than on what it was actually testing.
+  async function withFixtureDb<T>(
+    fn: (db: InstanceType<typeof Database>) => Promise<T>
+  ): Promise<T> {
+    const dir = mkdtempSync(join(tmpdir(), "astgl-drift-wire-"));
+    const db = new Database(join(dir, "k.db"));
+    try {
+      db.exec(`
+        CREATE TABLE articles (url TEXT PRIMARY KEY, title TEXT NOT NULL);
+        CREATE TABLE chunks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          article_url TEXT NOT NULL,
+          content TEXT NOT NULL
+        );
+      `);
+      runMigrations(db);
+      return await fn(db);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // WHAT: Stand in for the registry, then the tarball CDN.
+  // WHY:  runPublishGapCheck makes exactly two calls — packument, then tarball —
+  //       so dispatching on the URL covers both legs without a network.
+  function stubFetch(handlers: {
+    packument?: () => Response;
+    tarball?: () => Response;
+  }): () => void {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith(".tgz")) {
+        if (!handlers.tarball) throw new Error("unexpected tarball fetch");
+        return handlers.tarball();
+      }
+      if (!handlers.packument) throw new Error("unexpected packument fetch");
+      return handlers.packument();
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
+
+  function packumentResponse(over: Record<string, unknown> = {}): Response {
+    return new Response(
+      JSON.stringify({
+        "dist-tags": { latest: "1.3.0" },
+        time: { "1.3.0": "2026-07-30T04:24:36.635Z" },
+        versions: {
+          "1.3.0": {
+            dist: {
+              tarball: "https://registry.npmjs.org/x/-/x-1.3.0.tgz",
+              shasum: "abc123",
+            },
+          },
+        },
+        ...over,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  test("a tarball with no database is CRITICAL, not a warning", async () => {
+    const restore = stubFetch({
+      packument: () => packumentResponse(),
+      tarball: () =>
+        new Response(
+          // A tarball carrying only a README — the `npm pack` incident's shape.
+          tarball(tarMember("package/README.md", Buffer.from("# readme"))) as unknown as BodyInit,
+          { status: 200 }
+        ),
+    });
+    try {
+      const { drift: d, alert } = await withFixtureDb((db) =>
+        runPublishGapCheck(db)
+      );
+      assert.equal(d.content_measured, false);
+      assert.equal(d.unmeasured_reason, "tarball_member_missing");
+      assert.ok(alert);
+      assert.equal(alert.severity, "critical");
+    } finally {
+      restore();
+    }
+  });
+
+  test("an HTTP error from the registry is registry_unreachable, not no_latest", async () => {
+    // WHY: Same channel, wrong diagnosis. A 503 reported as "no latest dist-tag"
+    //      sends the reader to look for a publishing mistake that did not happen.
+    const restore = stubFetch({
+      packument: () => new Response("upstream boom", { status: 503 }),
+    });
+    try {
+      const { drift: d, alert } = await withFixtureDb((db) =>
+        runPublishGapCheck(db)
+      );
+      assert.equal(d.unmeasured_reason, "registry_unreachable");
+      assert.ok(alert);
+      assert.match(alert.details, /could not be reached/);
+    } finally {
+      restore();
+    }
+  });
+
+  test("a 200 with no latest dist-tag really is registry_no_latest", async () => {
+    const restore = stubFetch({
+      packument: () => packumentResponse({ "dist-tags": {} }),
+    });
+    try {
+      const { drift: d } = await withFixtureDb((db) => runPublishGapCheck(db));
+      assert.equal(d.unmeasured_reason, "registry_no_latest");
+    } finally {
+      restore();
+    }
+  });
+
+  test("a failed tarball download is tarball_unreachable", async () => {
+    const restore = stubFetch({
+      packument: () => packumentResponse(),
+      tarball: () => new Response("nope", { status: 404 }),
+    });
+    try {
+      const { drift: d, alert } = await withFixtureDb((db) =>
+        runPublishGapCheck(db)
+      );
+      assert.equal(d.unmeasured_reason, "tarball_unreachable");
+      assert.ok(alert);
+      assert.equal(alert.severity, "warning");
+    } finally {
+      restore();
+    }
+  });
+
+  test("a measured run records the version and its metrics", async () => {
+    const publishedDb = mkdtempSync(join(tmpdir(), "astgl-drift-pub-"));
+    const pubPath = join(publishedDb, "published.db");
+    const pub = new Database(pubPath);
+    pub.exec(`
+      CREATE TABLE articles (url TEXT PRIMARY KEY, title TEXT NOT NULL);
+      CREATE TABLE chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        article_url TEXT NOT NULL,
+        content TEXT NOT NULL
+      );
+      INSERT INTO articles (url, title) VALUES ('https://astgl.ai/a', 'A');
+      INSERT INTO chunks (article_url, content) VALUES ('https://astgl.ai/a', 'body');
+    `);
+    pub.close();
+    const dbBytes = readFileSync(pubPath);
+    rmSync(publishedDb, { recursive: true, force: true });
+
+    const restore = stubFetch({
+      packument: () => packumentResponse(),
+      tarball: () =>
+        new Response(tarball(tarMember(TARGET, dbBytes)) as unknown as BodyInit, {
+          status: 200,
+        }),
+    });
+    try {
+      await withFixtureDb((db) =>
+        runPublishGapCheck(db).then(({ drift: d }) => {
+          assert.equal(d.content_measured, true);
+          assert.equal(d.published_articles, 1);
+          assert.equal(d.published_chunks, 1);
+          // Local fixture is empty, so the registry legitimately holds more.
+          assert.equal(d.articles_delta, -1);
+
+          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, "mcp-astgl-knowledge");
+          assert.equal(snap?.current_version, "1.3.0");
+          assert.ok(snap?.metrics);
+          assert.equal(JSON.parse(snap.metrics).articles, 1);
+        })
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  test("a failed measurement records the version WITHOUT metrics", async () => {
+    // WHY: The version must still be recorded so the next run can detect a change,
+    //      but attaching no metrics keeps a failed read from inheriting counts.
+    const restore = stubFetch({
+      packument: () => packumentResponse(),
+      tarball: () => new Response("nope", { status: 500 }),
+    });
+    try {
+      await withFixtureDb((db) =>
+        runPublishGapCheck(db).then(() => {
+          const snap = getSnapshot(db, PUBLISH_GAP_CHECK_TYPE, "mcp-astgl-knowledge");
+          assert.equal(snap?.current_version, "1.3.0");
+          assert.equal(snap?.metrics, null);
+        })
+      );
+    } finally {
+      restore();
+    }
   });
 });
 
