@@ -406,9 +406,15 @@ const ZERO_COUNTERS: SummaryCounters = { processed: 0, skipped: 0, failed: 0 };
 //       exit path — success, refusal, partial failure — through a single function is
 //       what makes that checkable rather than aspirational. The signature requires the
 //       counters, so a new exit path cannot omit them by forgetting.
+let summaryEmitted = false;
+
 function emitSummary(
   summary: SummaryCounters & Record<string, unknown>
 ): void {
+  // WHY: exactly one line, so a late failure after a successful summary cannot
+  //      append a second and break every consumer that reads one JSON document.
+  if (summaryEmitted) return;
+  summaryEmitted = true;
   console.log(JSON.stringify(summary));
 }
 
@@ -459,13 +465,28 @@ async function main(): Promise<void> {
 
   const liveSchema = readSchema(LIVE_DB);
   if (!liveSchema) {
-    if (checkpoint) rmSync(checkpoint.path, { force: true });
+    // WHY: `force: true` only suppresses ENOENT — EACCES or EROFS still throw, and a
+    //      throw here would skip the summary below. The checkpoint path is reported
+    //      when cleanup fails, because claiming `checkpoint: null` while an 80 MB file
+    //      is still on disk tells the reader the opposite of what happened.
+    let orphanedCheckpoint: string | null = null;
+    if (checkpoint) {
+      try {
+        rmSync(checkpoint.path, { force: true });
+      } catch (err) {
+        orphanedCheckpoint = checkpoint.path;
+        console.error(
+          `  WARNING: could not remove checkpoint ${checkpoint.path}: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
     console.error("Could not read the live schema — refusing to classify backups.");
     emitSummary({
       ok: false,
       error: "live_schema_unreadable",
       dry_run: !flags.apply,
-      checkpoint: null,
+      checkpoint: orphanedCheckpoint,
+      checkpoint_cleanup_failed: orphanedCheckpoint !== null,
       ...ZERO_COUNTERS,
     });
     process.exitCode = 1;
@@ -584,7 +605,18 @@ if (isEntryPoint) {
     //      override it and report success after refusing to run.
     .then(() => process.exit(process.exitCode ?? 0))
     .catch((err) => {
-      console.error("prune-backups failed:", err instanceof Error ? err.message : err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("prune-backups failed:", message);
+      // WHY: found by sweeping the class rather than patching the reported instance.
+      //      Anything main() throws — a busy exclusive lock, a checkpoint that failed
+      //      verification — reached here and exited with NO json at all, which is the
+      //      same contract break as the two exits fixed last round.
+      emitSummary({
+        ok: false,
+        error: "unexpected_error",
+        message,
+        ...ZERO_COUNTERS,
+      });
       process.exit(1);
     });
 }
