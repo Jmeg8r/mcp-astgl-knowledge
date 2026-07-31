@@ -1,11 +1,11 @@
 {
   "name": "content-freshness",
-  "description": "Check for stale content and ecosystem version changes (npm packages, GitHub releases)",
+  "description": "Check for stale content, ecosystem version changes (npm packages, GitHub releases), and the local-vs-published publish gap",
   "schedule": "0 10 * * *",
   "scheduleReadable": "Every day at 10:00 AM (after content-gap-alerts at 9 AM)",
   "preExec": {
     "command": "cd /Users/jamescruce/Projects/mcp-astgl-knowledge && node dist/freshness.js",
-    "description": "Run freshness checks. Runs dist (not tsx) and omits --discord: the Discord LaunchAgent was retired 2026-07-26; MAESTER parses this JSON and delivers an actionable Telegram message."
+    "description": "Run freshness checks. Runs dist (not tsx) and omits --discord: the Discord LaunchAgent was retired 2026-07-26; MAESTER parses this JSON and delivers an actionable Telegram message. Runs all four checks — do NOT add --only, which would silently drop the rest. A check added to src/ is absent from this run until 'npm run build' has been run in that checkout, with no signal that it is missing."
   },
   "payload": {
     "instructions": [
@@ -13,7 +13,14 @@
       "Stale content alerts list articles older than 90 days — review and update or mark as still current.",
       "npm version change alerts mean the MCP SDK has updated — check changelog for breaking changes.",
       "GitHub release alerts mean a tracked tool (Ollama, Open WebUI, etc.) has a new release.",
-      "Ecosystem version info shows current tracked versions for reference."
+      "Ecosystem version info shows current tracked versions for reference.",
+      "The publish_drift object compares what this machine could publish against what npm actually serves — it reads the article count out of the published tarball, not just its version.",
+      "publish_drift.articles_delta > 0 means that many articles are gate-approved locally but absent from the published package; publish_drift.days_since_last_publish says how long that has been true. Action: run 'npm publish' (prepack re-runs build → reclassify → prune), or record why the gap is intentional.",
+      "CRITICAL — publish_drift.content_measured == false means the comparison DID NOT RUN. articles_delta will be null, not 0. Report this as UNKNOWN, never as 'no drift' or 'healthy'; publish_drift.unmeasured_reason says which leg failed.",
+      "A publish_gap alert with unmeasured_reason 'tarball_member_missing' is critical and is not a network problem: the published package shipped with no database inside it. Escalate rather than retry.",
+      "A NEGATIVE articles_delta is expected on any checkout whose data/knowledge.db is older than the published package, and is deliberately not alerted. Report it as context, not as a fault.",
+      "checks_run and checks_skipped name which checks actually ran. A metric reported as null (e.g. stale_articles) means its check did not run — that is not a zero.",
+      "If zero alerts fired AND publish_drift.content_measured is true, the system is healthy — no action needed. Both conditions are required."
     ]
   }
 }
