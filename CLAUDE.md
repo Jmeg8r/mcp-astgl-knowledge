@@ -371,8 +371,9 @@ from the actual data before designing anything — this is the standing lesson i
   PR's branch; nothing had re-run it against main in between, so the red sat there
   looking current. It was reported here as "build-mcpb is failing" before the timestamps
   were checked — don't repeat that. **Compare the run's SHA and time against `main`
-  before concluding anything**, and if it is stale, settle it by dispatching (artifacts
-  only — `attach_to_release=false` publishes nothing):
+  before concluding anything**, and if it is stale, settle it by dispatching
+  (`attach_to_release=false` creates workflow artifacts only and does not attach them
+  to a GitHub release — the bundles still exist, they are just not published):
 
   ```bash
   gh workflow run build-mcpb.yml --ref main \
@@ -383,13 +384,15 @@ from the actual data before designing anything — this is the standing lesson i
   The version must already be **published**, since each leg sources `dist/` and the
   pruned database out of the npm tarball via `--from-npm`; reading it from the registry
   rather than hardcoding one keeps the command correct after the next release.
-  Last verified **2026-07-31 against `main@4331dd55`**
+  Last verified **2026-07-31 against `main@4331dd55`, bundling published npm 1.3.0**
   ([run 30667252610](https://github.com/Jmeg8r/mcp-astgl-knowledge/actions/runs/30667252610)):
   all four platforms green, gate verified at 178 articles / 0 withheld / 0 drafts,
   confirming #36's win32 fix holds on main and not merely on its branch — which the
-  branch-only run never established. Record the SHA and run id when you re-verify; a
-  bare date is not checkable once main advances, and this entry's own rule is to compare
-  SHAs.
+  branch-only run never established. Record the SHA, the run id AND the npm version when you
+  re-verify: the command above resolves the version at dispatch time, so `npm view` will
+  return something else after the next release and the record would no longer identify
+  which tarball was actually bundled. A bare date is not checkable once main advances,
+  and this entry's own rule is to compare SHAs.
   → Corollary for any dispatch-only workflow: **"verified on the branch" and "works on
   main" are different claims**, and only one of them is what a release will run.
 
