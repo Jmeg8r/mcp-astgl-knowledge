@@ -1,0 +1,71 @@
+# WHAT: Runs the compile gate and the test suite on every PR and every push to main.
+# WHY:  `npm test` existed from 2026-07-30 but nothing executed it automatically, so it
+#       only ran when someone remembered. Several findings on PRs #37 and #41 were
+#       things the suite would have caught before a reviewer read the diff — a test that
+#       runs only by hand is a test that reports green by not running.
+#
+#       Both gates, not one: `npm run build` is tsc strict (the repo's only type check)
+#       and `npm test` is node:test via tsx. CLAUDE.md's baseline quality bar requires
+#       both, so CI asserts both.
+#
+# INJECTION SURFACE: none. No `run:` step interpolates a `${{ }}` expression, so no
+#       attacker-controlled field (PR title, branch name, commit message) can reach a
+#       shell. The only expression in the file is `github.ref` inside `concurrency`,
+#       which is not a shell context. Keep it that way — if a future step needs a
+#       workflow value, pass it through `env:` and reference it as a quoted shell
+#       variable, the way build-mcpb.yml does.
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# WHY: A second push to the same PR makes the first run's verdict irrelevant. Cancelling
+#      it avoids reporting a stale pass against superseded code — the same class of
+#      false green this suite exists to prevent.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build + test
+    runs-on: ubuntu-latest
+
+    steps:
+      # WHY: Pinned to a commit, and credentials are NOT persisted — this job runs
+      #      `npm ci`, which executes third-party install scripts, and leaving a
+      #      checkout token on disk during that is an avoidable exposure. Same
+      #      reasoning as build-mcpb.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # WHY: Node is pinned rather than floated, matching build-mcpb.yml.
+      #      better-sqlite3's compiled binary is tied to the Node ABI, so a runner
+      #      moving to a new major would change what is actually being tested.
+      #      Bump deliberately and re-verify.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.14.0"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # WHY: tsc strict is the repo's only type gate. Run it before the tests so a
+      #      compile error is reported as a compile error rather than surfacing as a
+      #      confusing runtime failure inside the suite.
+      - name: Compile gate (tsc strict)
+        run: npm run build
+
+      # WHY: The suite needs no network — every outbound call in the publish-drift
+      #      tests is stubbed — and `data/knowledge.db` is git-tracked, so a checkout
+      #      already has the database the fixtures read. Nothing to provision.
+      - name: Tests
+        run: npm test
