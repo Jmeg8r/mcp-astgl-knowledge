@@ -120,50 +120,29 @@ deletes one**. That is deliberate — they are the last-resort restore point for
 mistakes this manual exists to prevent — but it grew to 8 files and 323 MB before anyone
 looked.
 
-The rule, applied by hand during any cleanup pass. A backup is an eligible restore point
-only if it satisfies **both** conditions — not either:
+**Use `npm run prune-backups`** (dry run by default; `--apply` to delete). It takes a
+verified checkpoint first, then removes only backups that fail the rule below. Deleting
+backups is **stop-and-ask** — show James the dry-run output and get approval before
+`--apply`.
 
-1. It is the newest checkpoint, **or** younger than 30 days; **and**
+The policy it enforces: a backup is an eligible restore point only if it satisfies
+**both** conditions, not either —
+
+1. it is the fresh checkpoint, **or** younger than `--keep-days` (default 30); **and**
 2. its `articles` schema matches the live database.
 
-- **Schema age is the real expiry, not calendar age.** A backup taken 10 days ago but
-  before a migration 5 days ago passes the age test and is still useless — restoring it
-  rolls the schema back. The 8 files pruned in July were all pre-`public` column: any
-  restore would have lost the entire publication gate plus two weeks of content. A backup
-  older than your last schema migration is a rollback wearing a backup's filename.
-  Test it directly, don't guess a date — and compare the **full** column metadata, not
-  just names, because a type / `NOT NULL` / `DEFAULT` / pk / ordering change is invisible
-  to a name list. Verified: a backup whose `public` column lost `NOT NULL DEFAULT 0` — the
-  gate's fail-closed property — passes a names-only check.
-  ```bash
-  sqlite3 -json "file:<db>?mode=ro" \
-    "SELECT cid, name, type, \"notnull\", COALESCE(dflt_value,'') AS dflt, pk
-     FROM pragma_table_info('articles') ORDER BY cid;"
-  ```
-  **`-json`, not a delimiter-joined string.** A `:`-joined signature collides —
-  `("a:b" TEXT)` and `(a "b:TEXT")` both render as `0:a:b:TEXT:0::0`, so an incompatible
-  backup would classify compatible. Verified: the two differ under `-json`.
-  Assert the result is **non-empty** before comparing: a failed query returns `""`, and
-  `"" = ""` compares equal, so every backup would be reported compatible by comparing
-  nothing to nothing.
-- **Stop the writers, don't just check them.** `lsof` is a point-in-time read and cannot
-  stop a scheduled job opening the database a second later. A writer that commits to
-  `knowledge.db-wal` after the copy leaves the **main file byte-identical**, so an md5
-  check passes while the backup omits that commit. Boot the launchd jobs out for the
-  duration (itself stop-and-ask), or run well clear of all four schedules and treat the
-  post-copy WAL/lsof re-check as detection rather than prevention.
-- **Before pruning, take a fresh checkpoint** (`…bak.checkpoint-<ISO>`) and verify it —
-  WAL-checkpoint first if sidecars exist, then `PRAGMA integrity_check`, row counts against
-  the live DB, and an `md5` comparison. **Every check must abort on failure**, not print:
-  the first draft of this recipe ended in `[ … ] && echo "byte-identical"`, which prints
-  nothing on mismatch and falls straight through to the delete. Pruning stale backups
-  without a verified current one trades clutter for exposure.
-- **Delete by explicit name, never by glob.** `rm data/*.bak.*` would take the checkpoint
-  you just made along with the rest.
-- This is a **stop-and-ask** operation (see the escalation rules); list sizes and dates and
-  get approval before deleting anything.
+**Schema age is the real expiry, not calendar age.** A backup taken 10 days ago but before
+a migration 5 days ago passes the age test and is still useless — restoring it rolls the
+schema back. The 8 files pruned on 2026-07-31 were all pre-`public` column: any restore
+would have lost the entire publication gate plus two weeks of content. A backup older than
+your last schema migration is a rollback wearing a backup's filename.
 
-The runnable version lives in the `astgl-db-surgeon` skill — keep the two in step.
+→ **Rule: do not re-implement this by hand.** The bash recipe this replaced took eleven
+review findings across four rounds, three of which shell could not fix at all — `lsof`
+observes writers rather than excluding them, delimiter-joined schema signatures collide,
+and a failed shell query returns `""` which compares equal to another `""`. The script
+holds `BEGIN EXCLUSIVE` across the copy, compares schemas structurally, and treats an
+unreadable backup as never-matching. See `src/prune-backups.ts` and its tests.
 
 Additional rules (not yet uniform in the codebase, but required for new code):
 

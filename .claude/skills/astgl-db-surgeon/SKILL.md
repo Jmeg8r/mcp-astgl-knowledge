@@ -128,140 +128,41 @@ git-tracked, and a checkpoint changes the file git sees.
 
 ## Recipe: Backup pruning (ask-first — this deletes files)
 
-`data/*.bak.*` grows unbounded (reconciler snapshots ~80 MB each). These are the
-LAST-RESORT restore points for every mistake this skill exists to prevent — when in
-doubt, keep. List with sizes and dates, propose a retention, and delete only what James
-approves, **by explicit name**.
+`data/*.bak.*` grows unbounded (~80 MB per snapshot, nothing ever deletes one; `data/`
+reached 485 MB before anyone looked). These are the LAST-RESORT restore points for every
+mistake this skill exists to prevent — when in doubt, keep.
 
-Retention rule — a backup is an eligible restore point only if it is **both**:
-
-1. the newest checkpoint, **or** younger than 30 days; **and**
-2. **schema-compatible with the live database.**
-
-Both conditions, not either. Age alone is not enough: a backup taken 10 days ago but
-before a migration 5 days ago passes the age test and is still useless — restoring it
-would roll the schema back. Check compatibility directly rather than guessing a
-migration date (verified both directions before this was written: a fixture missing the
-`public` column is rejected, the real checkpoint is accepted).
+**Use the script, not hand-run SQL:**
 
 ```bash
-set -euo pipefail   # every check below ABORTS; none of them merely print
-
-# 0. Preflight — BEFORE the checkpoint and long before any delete.
-#
-#    STOP THE WRITERS FIRST. `lsof` is a point-in-time read: it cannot stop a
-#    scheduled job from opening the database one second later. Worse, a writer
-#    that commits to data/knowledge.db-wal after the copy leaves the MAIN file
-#    byte-identical, so the md5 check below would pass while the backup silently
-#    omits that commit. There is no lock these pipelines honour, so exclusion has
-#    to be operational:
-#
-#      launchctl bootout gui/$UID/ai.astgl.knowledge.<job>     # for each job
-#      … prune …
-#      launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.astgl.knowledge.<job>.plist
-#
-#    Booting jobs out is STOP-AND-ASK (CLAUDE.md) — get James's approval, do not
-#    do it unilaterally. Jobs: 00/06/12/18 content-pipeline, 00:00 draft-pipeline,
-#    00:30 wiki-sync, 02:00 draft-reconciler. If stopping them is not acceptable,
-#    run the prune in a window well clear of all four and accept that step 3's
-#    re-check is detection, not prevention.
-command -v lsof >/dev/null 2>&1 \
-  || { echo "ABORT: lsof unavailable — cannot verify the database is idle"; exit 1; }
-# WHY tri-state: `! lsof … || abort` treats EVERY nonzero exit as "no handles",
-# so a missing binary (127) or an lsof error (2) would read as idle and proceed.
-# Only exit 1 — "ran fine, found nothing" — is safe.
-LSOF_RC=0; lsof data/knowledge.db >/dev/null 2>&1 || LSOF_RC=$?
-case "$LSOF_RC" in
-  0) echo "ABORT: database is in use"; exit 1 ;;
-  1) : ;;   # idle — the only case that may proceed
-  *) echo "ABORT: lsof failed (exit $LSOF_RC) — cannot verify idle state"; exit 1 ;;
-esac
-
-# 1. Inventory — always show sizes and dates before proposing anything
-ls -la data/*.bak.* | awk '{printf "%8.1f MB  %s %s %s  %s\n", $5/1024/1024, $6,$7,$8, $9}'
-du -ch data/*.bak.* | tail -1
-
-# 2. Checkpoint WAL before copying, or `cp` snapshots an inconsistent state (iron rule #1)
-[ -f data/knowledge.db-wal ] && sqlite3 data/knowledge.db "PRAGMA wal_checkpoint(TRUNCATE);"
-
-# 3. Fresh checkpoint, VERIFIED — each check aborts and removes the bad copy
-BAK="data/knowledge.db.bak.checkpoint-$(date -u +%Y-%m-%dT%H-%M-%SZ)"
-cp data/knowledge.db "$BAK"
-
-[ "$(sqlite3 "file:${BAK}?mode=ro" 'PRAGMA integrity_check;')" = "ok" ] \
-  || { echo "ABORT: checkpoint failed integrity_check"; rm -f "$BAK"; exit 1; }
-
-LIVE_N=$(sqlite3 "file:data/knowledge.db?mode=ro" "SELECT COUNT(*) FROM articles;")
-BAK_N=$(sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;")
-[ "$LIVE_N" = "$BAK_N" ] \
-  || { echo "ABORT: count mismatch (live $LIVE_N vs backup $BAK_N)"; rm -f "$BAK"; exit 1; }
-
-[ "$(md5 -q "$BAK")" = "$(md5 -q data/knowledge.db)" ] \
-  || { echo "ABORT: checkpoint is not byte-identical"; rm -f "$BAK"; exit 1; }
-
-# Post-copy race detection. A writer that opened AFTER step 0 and committed to a
-# new WAL leaves the main file unchanged, so the md5 above passes while the copy
-# is missing that commit. A -wal appearing now is proof of exactly that.
-[ ! -f data/knowledge.db-wal ] \
-  || { echo "ABORT: a WAL appeared during the copy — a writer was active; checkpoint is not trustworthy"; rm -f "$BAK"; exit 1; }
-RC2=0; lsof data/knowledge.db >/dev/null 2>&1 || RC2=$?
-[ "$RC2" = "1" ] \
-  || { echo "ABORT: database became busy during the copy (lsof rc=$RC2)"; rm -f "$BAK"; exit 1; }
-
-echo "checkpoint verified: $BAK ($BAK_N articles)"
-
-# 4. Classify every OTHER backup by schema compatibility, not just age.
-#    WHY the full signature: column NAMES alone cannot see a type, NOT NULL,
-#    DEFAULT, pk or ordering change. Verified — a backup whose `public` column
-#    lost `NOT NULL DEFAULT 0` (the gate's fail-closed property) passes a
-#    names-only check and is rejected by this one.
-# WHY -json and not a delimiter-joined string: a `:`-joined signature COLLIDES.
-# `("a:b" TEXT)` and `(a "b:TEXT")` both render as `0:a:b:TEXT:0::0`, so an
-# incompatible backup would classify SCHEMA-OK. Verified — the two differ under
-# -json, which quotes and escapes each field. (Requires sqlite3 ≥ 3.33.)
-SCHEMA_SQL="SELECT cid, name, type, \"notnull\", COALESCE(dflt_value,'') AS dflt, pk
-  FROM pragma_table_info('articles') ORDER BY cid;"
-schema_of() { sqlite3 -json "file:$1?mode=ro" "$SCHEMA_SQL" 2>/dev/null || true; }
-
-LIVE_SCHEMA=$(schema_of data/knowledge.db)
-# WHY this guard: a failed query returns "", and "" = "" compares EQUAL — every
-# backup would be reported SCHEMA-OK by comparing nothing to nothing. This exact
-# false match happened while developing this recipe (a double-quoted SQL literal
-# made both sides empty), so the emptiness is checked rather than assumed.
-[ -n "$LIVE_SCHEMA" ] \
-  || { echo "ABORT: could not read live schema — cannot classify backups"; exit 1; }
-
-for f in data/knowledge.db.bak.*; do
-  [ "$f" = "$BAK" ] && continue
-  S=$(schema_of "$f")
-  if [ -z "$S" ]; then echo "  UNREADABLE    $f   <- treat as NOT a restore point"
-  elif [ "$S" = "$LIVE_SCHEMA" ]; then echo "  SCHEMA-OK     $f"
-  else echo "  STALE-SCHEMA  $f   <- not a restore point regardless of age"; fi
-done
-
-# 5. Delete by explicit name from the approved list — NEVER `rm data/*.bak.*`,
-#    which would take the checkpoint you just made.
+npm run prune-backups                    # DRY RUN (default) — reports, deletes nothing
+npm run prune-backups -- --apply         # actually delete
+npm run prune-backups -- --keep-days 60  # widen the age window
 ```
 
-Three things learned pruning 323 MB on 2026-07-31:
+It takes a verified checkpoint first, then deletes only backups that fail the retention
+rule. Show James the dry-run output and get approval before `--apply` — deleting backups
+is stop-and-ask.
 
-- **Schema age is the real expiry, not calendar age.** All 8 files removed predated the
-  `public` column, so restoring any would have lost the entire publication gate plus two
-  weeks of content. A backup older than your last schema migration is not a restore
-  point — it is a rollback wearing a backup's filename.
-- **Prune only with a verified checkpoint in hand.** Otherwise you trade clutter for
-  exposure — the newest file was 17 days stale and was the *only* full restore point.
-- **A verification that prints is not a verification.** The first version of this recipe
-  ended in `[ "$(md5 …)" = "$(md5 …)" ] && echo "byte-identical"`, which prints nothing
-  on mismatch and falls through to the delete step. Every check here now aborts.
-- **Ordering is part of a safety procedure.** The scheduled-job warning used to sit
-  *below* the code block — after the step that says "delete". Anything an operator must
-  know before acting belongs in preflight, not in the epilogue.
-- **A comparison of two empty strings succeeds.** Three of the checks above can return
-  empty on failure (`lsof` unavailable, an unreadable backup, a malformed schema query),
-  and every one of those would otherwise read as agreement. Assert non-empty before
-  comparing — this is the same defect as the printing verification, wearing a different
-  hat.
+**Retention rule:** keep the fresh checkpoint, plus any backup that is **both** within
+`--keep-days` **and** schema-compatible with the live database. Age alone is not enough:
+a backup taken 10 days ago but before a migration 5 days ago restores a schema the code
+no longer expects. The 8 files pruned on 2026-07-31 all predated the `public` column, so
+any restore would have silently dropped the publication gate's fail-closed default.
+
+**Why a script and not a bash recipe here.** The recipe this replaces took eleven review
+findings across four rounds, and three of them could not be fixed in shell at all:
+
+- `lsof` only *observes* — it cannot stop a scheduled job opening the database a moment
+  later, and a commit landing in the WAL leaves the main file byte-identical, so a hash
+  check passes over a backup missing that commit. The script copies inside
+  `BEGIN EXCLUSIVE`, so SQLite blocks other writers outright.
+- A delimiter-joined schema signature collides (`("a:b" TEXT)` vs `(a "b:TEXT")`). The
+  script compares structured values, where the collision cannot be expressed.
+- A failed shell query returns `""`, and `"" = ""` compares equal, so every backup read
+  as compatible. The script yields `null`, which is never equal to anything.
+
+See `src/prune-backups.ts` and its tests.
 
 ## Recipe: Restore from backup (disaster path — ask first, always)
 
