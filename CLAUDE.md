@@ -131,9 +131,18 @@ only if it satisfies **both** conditions — not either:
   rolls the schema back. The 8 files pruned in July were all pre-`public` column: any
   restore would have lost the entire publication gate plus two weeks of content. A backup
   older than your last schema migration is a rollback wearing a backup's filename.
-  Test it directly, don't guess a date:
-  `sqlite3 "file:<bak>?mode=ro" "SELECT group_concat(name) FROM pragma_table_info('articles');"`
-  and compare to the live database.
+  Test it directly, don't guess a date — and compare the **full** column metadata, not
+  just names, because a type / `NOT NULL` / `DEFAULT` / pk / ordering change is invisible
+  to a name list. Verified: a backup whose `public` column lost `NOT NULL DEFAULT 0` — the
+  gate's fail-closed property — passes a names-only check.
+  ```sql
+  SELECT group_concat(sig,'|') FROM (
+    SELECT cid||':'||name||':'||type||':'||"notnull"||':'||COALESCE(dflt_value,'')||':'||pk AS sig
+    FROM pragma_table_info('articles') ORDER BY cid);
+  ```
+  Assert the result is **non-empty** before comparing: a failed query returns `""`, and
+  `"" = ""` compares equal, so every backup would be reported compatible by comparing
+  nothing to nothing.
 - **Before pruning, take a fresh checkpoint** (`…bak.checkpoint-<ISO>`) and verify it —
   WAL-checkpoint first if sidecars exist, then `PRAGMA integrity_check`, row counts against
   the live DB, and an `md5` comparison. **Every check must abort on failure**, not print:

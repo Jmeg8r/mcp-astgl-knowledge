@@ -147,8 +147,21 @@ migration date (verified both directions before this was written: a fixture miss
 ```bash
 set -euo pipefail   # every check below ABORTS; none of them merely print
 
-# 0. Preflight — refuse on a busy database or an imminent job
-! lsof data/knowledge.db >/dev/null 2>&1 || { echo "ABORT: database in use"; exit 1; }
+# 0. Preflight — BEFORE the checkpoint and long before any delete.
+#    Scheduled jobs: 00/06/12/18 content-pipeline, 00:00 draft-pipeline,
+#    00:30 wiki-sync, 02:00 draft-reconciler. If one fires mid-prune the
+#    checkpoint is a torn snapshot. Confirm none is imminent, then:
+command -v lsof >/dev/null 2>&1 \
+  || { echo "ABORT: lsof unavailable — cannot verify the database is idle"; exit 1; }
+# WHY tri-state: `! lsof … || abort` treats EVERY nonzero exit as "no handles",
+# so a missing binary (127) or an lsof error (2) would read as idle and proceed.
+# Only exit 1 — "ran fine, found nothing" — is safe.
+LSOF_RC=0; lsof data/knowledge.db >/dev/null 2>&1 || LSOF_RC=$?
+case "$LSOF_RC" in
+  0) echo "ABORT: database is in use"; exit 1 ;;
+  1) : ;;   # idle — the only case that may proceed
+  *) echo "ABORT: lsof failed (exit $LSOF_RC) — cannot verify idle state"; exit 1 ;;
+esac
 
 # 1. Inventory — always show sizes and dates before proposing anything
 ls -la data/*.bak.* | awk '{printf "%8.1f MB  %s %s %s  %s\n", $5/1024/1024, $6,$7,$8, $9}'
@@ -174,14 +187,28 @@ BAK_N=$(sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;")
 
 echo "checkpoint verified: $BAK ($BAK_N articles)"
 
-# 4. Classify every OTHER backup by schema compatibility, not just age
-LIVE_SCHEMA=$(sqlite3 "file:data/knowledge.db?mode=ro" \
-  "SELECT group_concat(name) FROM pragma_table_info('articles');")
+# 4. Classify every OTHER backup by schema compatibility, not just age.
+#    WHY the full signature: column NAMES alone cannot see a type, NOT NULL,
+#    DEFAULT, pk or ordering change. Verified — a backup whose `public` column
+#    lost `NOT NULL DEFAULT 0` (the gate's fail-closed property) passes a
+#    names-only check and is rejected by this one.
+SCHEMA_SQL="SELECT group_concat(sig,'|') FROM (
+  SELECT cid||':'||name||':'||type||':'||\"notnull\"||':'||COALESCE(dflt_value,'')||':'||pk AS sig
+  FROM pragma_table_info('articles') ORDER BY cid);"
+
+LIVE_SCHEMA=$(sqlite3 "file:data/knowledge.db?mode=ro" "$SCHEMA_SQL")
+# WHY this guard: a failed query returns "", and "" = "" compares EQUAL — every
+# backup would be reported SCHEMA-OK by comparing nothing to nothing. This exact
+# false match happened while developing this recipe (a double-quoted SQL literal
+# made both sides empty), so the emptiness is checked rather than assumed.
+[ -n "$LIVE_SCHEMA" ] \
+  || { echo "ABORT: could not read live schema — cannot classify backups"; exit 1; }
+
 for f in data/knowledge.db.bak.*; do
   [ "$f" = "$BAK" ] && continue
-  S=$(sqlite3 "file:${f}?mode=ro" \
-        "SELECT group_concat(name) FROM pragma_table_info('articles');" 2>/dev/null || echo UNREADABLE)
-  if [ "$S" = "$LIVE_SCHEMA" ]; then echo "  SCHEMA-OK     $f"
+  S=$(sqlite3 "file:${f}?mode=ro" "$SCHEMA_SQL" 2>/dev/null || true)
+  if [ -z "$S" ]; then echo "  UNREADABLE    $f   <- treat as NOT a restore point"
+  elif [ "$S" = "$LIVE_SCHEMA" ]; then echo "  SCHEMA-OK     $f"
   else echo "  STALE-SCHEMA  $f   <- not a restore point regardless of age"; fi
 done
 
@@ -200,9 +227,14 @@ Three things learned pruning 323 MB on 2026-07-31:
 - **A verification that prints is not a verification.** The first version of this recipe
   ended in `[ "$(md5 …)" = "$(md5 …)" ] && echo "byte-identical"`, which prints nothing
   on mismatch and falls through to the delete step. Every check here now aborts.
-
-Check that no scheduled job is about to fire — `00/06/12/18` content-pipeline, `00:00`
-draft-pipeline, `00:30` wiki-sync, `02:00` draft-reconciler.
+- **Ordering is part of a safety procedure.** The scheduled-job warning used to sit
+  *below* the code block — after the step that says "delete". Anything an operator must
+  know before acting belongs in preflight, not in the epilogue.
+- **A comparison of two empty strings succeeds.** Three of the checks above can return
+  empty on failure (`lsof` unavailable, an unreadable backup, a malformed schema query),
+  and every one of those would otherwise read as agreement. Assert non-empty before
+  comparing — this is the same defect as the printing verification, wearing a different
+  hat.
 
 ## Recipe: Restore from backup (disaster path — ask first, always)
 
