@@ -223,10 +223,39 @@ placeholder line in `.env.example` and go into pass. `.env` values may be refere
 never displayed.**
 
 **10. The Blanket Commit.** You `git add -A` and sweep in `data/*.bak.*`, WAL sidecars,
-logs, or an unintended 50 MB `knowledge.db` change.
-→ **Rule: stage files by name. A `knowledge.db` commit is a deliberate release act
-(it ships in the npm package) — call it out in the commit message and PR body. If the
-diff shows `data/` changes you didn't intend, stop and ask.**
+logs, or an unintended 80 MB `knowledge.db` change.
+→ **Rule: stage files by name. If the diff shows `data/` changes you didn't intend, stop
+and ask.**
+
+→ **Rule: NEVER commit `data/knowledge.db`. This repository is PUBLIC, and the working
+copy holds hundreds of rows the publication gate exists to withhold.** Measured
+2026-07-31: 475 articles, of which **178 are `public = 1` and 297 are withheld** — 206
+unpublished drafts in full searchable text, 85 non-allowlisted entities, 6
+internal-jargon concepts. Those 85 include three of the four ADR-0001 named individually
+— `Income Investor` (business-legal status and state of residence), `astgl-gtm` (a private
+workspace path), and `Autonomous Commerce Agent (ACA)` (a `/Users/…` username). Read those
+counts as a timestamp, not a constant.
+
+(The fourth, `OpenClaw`, is `public = 1` and **does ship** — it is named in
+`src/public-allowlist.ts` deliberately, consistent with ADR-0001's own conclusion that it
+"is retired and reads as a before/after case study." Verified present in published npm
+1.3.0. Not a gate failure; noted so nobody re-reads the ADR's table as four withheld
+pages, as this rule's first draft did.)
+
+**The gate guards npm, not git.** ADR-0001 reasoned carefully about the tarball —
+`package.json` `files` ships `build/knowledge-public.db`, and `prepack` runs the prune —
+and never addressed the second channel. Committing `data/knowledge.db` walks straight
+past all of it, into public history, permanently. The file is still *tracked* at an old
+144-article revision from 2026-07-13; **leave it stale.** That staleness is now load-
+bearing, not neglect: ADR-0001 stopped shipping the file, `src/db-path.ts` resolves the
+pruned artifact for installed packages, and `npm run publish-drift` measures the gap
+deliberately. Nothing needs the tracked copy to be current.
+
+Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
+release act (it ships in the npm package)". That stopped being true on 2026-07-29 and
+framed the risk as *release hygiene* rather than *disclosure* — which is the more
+dangerous half. If someone asks you to commit the database, surface these numbers and get
+an explicit decision; do not infer consent from "commit the changes".
 
 **11. The Forced Duplicate.** You re-queue a rewrite with
 `--article-url` "to be safe" — that flag bypasses the pending-approval/cooldown guard
@@ -457,6 +486,12 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
+
+→ **Rule: the gate covers npm, NOT git.** This repo is public, and `data/knowledge.db` is
+tracked at a stale 144-article revision. Committing the current 475-article file would put
+297 withheld rows into public history with no gate in the way — see Mistake #10. ADR-0001
+reasoned about the tarball and never addressed this second channel; the only thing holding
+it closed is that nobody stages the file.
 
 ### The publish-gap instrument (added 2026-07-30, ADR-0001 amendment)
 
