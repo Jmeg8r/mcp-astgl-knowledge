@@ -65,6 +65,26 @@ describe("prune-backups entry-point guard", () => {
       const out = result.stdout ?? "";
       const err = result.stderr ?? "";
 
+      // WHY: check HOW the child died before interpreting what it printed. Without
+      //      this, a tsx loader failure or the timeout leaves `out` empty, `line`
+      //      undefined, and the assertion below announces "main() ran at module
+      //      scope" — naming a cause that did not happen. That is precisely the
+      //      misleading-diagnostic failure this file's header sets out to avoid, so
+      //      it would have been an especially poor place to reproduce it.
+      assert.equal(
+        result.error,
+        undefined,
+        `probe child could not be run (${result.error?.message}) — this is a harness ` +
+          "failure, not a guard regression"
+      );
+      assert.equal(
+        result.status,
+        0,
+        `probe child exited ${result.status} (signal ${result.signal}). stderr:\n${err}\n` +
+          "A non-zero exit here is a harness or loader failure unless the assertions " +
+          "below identify a guard regression."
+      );
+
       // WHAT: the load-bearing assertion — did main() PRODUCE ANYTHING?
       // WHY:  the two earlier signals were proxies and both have already been
       //       invalidated by unrelated correct changes. "Did control return?" stopped

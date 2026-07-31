@@ -557,6 +557,7 @@ async function main(): Promise<void> {
   let deleted = 0;
   let failed = 0;
   let skipped = 0;
+  let sidecarFailures = 0;
   let bytesFreed = 0;
 
   if (flags.apply) {
@@ -574,15 +575,33 @@ async function main(): Promise<void> {
         //      overstating what this run actually reclaimed. ENOENT is a distinct,
         //      benign outcome and is reported as such.
         rmSync(p.path);
-        // WHY: sidecars are part of this backup; leaving them orphans WAL fragments
-        //      in data/ that no later run would recognise as belonging to anything.
-        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-          const sidecar = `${p.path}${suffix}`;
-          if (existsSync(sidecar)) rmSync(sidecar);
-        }
+        // WHY: recorded IMMEDIATELY, before touching sidecars. The base file is gone
+        //      the instant that call returns, so a later throw must not be able to
+        //      unwind the record of it — this block previously incremented after the
+        //      sidecar loop, so a sidecar failure reported the entry as failed/skipped
+        //      and left pruned and bytes_freed UNDERSTATING what the run destroyed.
         deleted++;
         bytesFreed += p.bytes;
         console.error(`  deleted ${p.path}`);
+
+        // WHY: sidecars are part of this backup; leaving them orphans WAL fragments in
+        //      data/ that no later run would recognise as belonging to anything. Their
+        //      failures are counted separately — the backup IS pruned either way, so
+        //      folding them into `failed` would misreport the outcome in the other
+        //      direction. Only attempted once the base is confirmed gone, so a failed
+        //      base deletion never strands its own sidecars.
+        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+          const sidecar = `${p.path}${suffix}`;
+          if (!existsSync(sidecar)) continue;
+          try {
+            rmSync(sidecar);
+          } catch (sidecarErr) {
+            sidecarFailures++;
+            console.error(
+              `  WARNING: orphaned sidecar ${sidecar}: ${sidecarErr instanceof Error ? sidecarErr.message : sidecarErr}`
+            );
+          }
+        }
       } catch (err) {
         const code = (err as NodeJS.ErrnoException)?.code;
         if (code === "ENOENT") {
@@ -614,6 +633,10 @@ async function main(): Promise<void> {
       skipped,
       failed,
       pruned: deleted,
+      // WHAT: sidecars that could not be removed after their base backup was pruned.
+      // WHY:  informational, deliberately NOT folded into `failed` — the backup was
+      //       pruned; only a fragment remains.
+      sidecar_failures: sidecarFailures,
       prunable: prune.length,
       // WHY: only bytes actually reclaimed. Reporting the full planned total would
       //      overstate the result whenever a deletion failed.
