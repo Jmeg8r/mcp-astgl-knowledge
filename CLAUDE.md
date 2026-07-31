@@ -120,20 +120,32 @@ deletes one**. That is deliberate — they are the last-resort restore point for
 mistakes this manual exists to prevent — but it grew to 8 files and 323 MB before anyone
 looked.
 
-The rule, applied by hand during any cleanup pass:
+The rule, applied by hand during any cleanup pass. A backup is an eligible restore point
+only if it satisfies **both** conditions — not either:
 
-- **Keep the newest checkpoint, plus anything younger than 30 days.** Everything older is
-  a restore point to a database that no longer resembles the live one.
-- **Age is the real expiry, not count.** The 8 files pruned in July were all pre-`public`
-  column: restoring any would have lost the entire publication gate along with two weeks of
-  content. A backup that predates a schema migration is not a restore point, it is a trap.
+1. It is the newest checkpoint, **or** younger than 30 days; **and**
+2. its `articles` schema matches the live database.
+
+- **Schema age is the real expiry, not calendar age.** A backup taken 10 days ago but
+  before a migration 5 days ago passes the age test and is still useless — restoring it
+  rolls the schema back. The 8 files pruned in July were all pre-`public` column: any
+  restore would have lost the entire publication gate plus two weeks of content. A backup
+  older than your last schema migration is a rollback wearing a backup's filename.
+  Test it directly, don't guess a date:
+  `sqlite3 "file:<bak>?mode=ro" "SELECT group_concat(name) FROM pragma_table_info('articles');"`
+  and compare to the live database.
 - **Before pruning, take a fresh checkpoint** (`…bak.checkpoint-<ISO>`) and verify it —
-  `PRAGMA integrity_check`, row counts against the live DB, and an `md5` comparison. Pruning
-  stale backups without a current one trades clutter for exposure.
+  WAL-checkpoint first if sidecars exist, then `PRAGMA integrity_check`, row counts against
+  the live DB, and an `md5` comparison. **Every check must abort on failure**, not print:
+  the first draft of this recipe ended in `[ … ] && echo "byte-identical"`, which prints
+  nothing on mismatch and falls straight through to the delete. Pruning stale backups
+  without a verified current one trades clutter for exposure.
 - **Delete by explicit name, never by glob.** `rm data/*.bak.*` would take the checkpoint
   you just made along with the rest.
 - This is a **stop-and-ask** operation (see the escalation rules); list sizes and dates and
   get approval before deleting anything.
+
+The runnable version lives in the `astgl-db-surgeon` skill — keep the two in step.
 
 Additional rules (not yet uniform in the codebase, but required for new code):
 

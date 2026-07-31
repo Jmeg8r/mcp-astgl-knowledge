@@ -133,35 +133,76 @@ LAST-RESORT restore points for every mistake this skill exists to prevent — wh
 doubt, keep. List with sizes and dates, propose a retention, and delete only what James
 approves, **by explicit name**.
 
-Retention rule: **keep the newest checkpoint plus anything younger than 30 days.**
+Retention rule — a backup is an eligible restore point only if it is **both**:
+
+1. the newest checkpoint, **or** younger than 30 days; **and**
+2. **schema-compatible with the live database.**
+
+Both conditions, not either. Age alone is not enough: a backup taken 10 days ago but
+before a migration 5 days ago passes the age test and is still useless — restoring it
+would roll the schema back. Check compatibility directly rather than guessing a
+migration date (verified both directions before this was written: a fixture missing the
+`public` column is rejected, the real checkpoint is accepted).
 
 ```bash
+set -euo pipefail   # every check below ABORTS; none of them merely print
+
+# 0. Preflight — refuse on a busy database or an imminent job
+! lsof data/knowledge.db >/dev/null 2>&1 || { echo "ABORT: database in use"; exit 1; }
+
 # 1. Inventory — always show sizes and dates before proposing anything
 ls -la data/*.bak.* | awk '{printf "%8.1f MB  %s %s %s  %s\n", $5/1024/1024, $6,$7,$8, $9}'
 du -ch data/*.bak.* | tail -1
 
-# 2. Take a CURRENT checkpoint first, and verify it before deleting anything
+# 2. Checkpoint WAL before copying, or `cp` snapshots an inconsistent state (iron rule #1)
+[ -f data/knowledge.db-wal ] && sqlite3 data/knowledge.db "PRAGMA wal_checkpoint(TRUNCATE);"
+
+# 3. Fresh checkpoint, VERIFIED — each check aborts and removes the bad copy
 BAK="data/knowledge.db.bak.checkpoint-$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 cp data/knowledge.db "$BAK"
-sqlite3 "file:${BAK}?mode=ro" "PRAGMA integrity_check;"
-sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;"   # must match live
-[ "$(md5 -q "$BAK")" = "$(md5 -q data/knowledge.db)" ] && echo "byte-identical"
 
-# 3. Delete by name from the approved list — NEVER `rm data/*.bak.*`,
+[ "$(sqlite3 "file:${BAK}?mode=ro" 'PRAGMA integrity_check;')" = "ok" ] \
+  || { echo "ABORT: checkpoint failed integrity_check"; rm -f "$BAK"; exit 1; }
+
+LIVE_N=$(sqlite3 "file:data/knowledge.db?mode=ro" "SELECT COUNT(*) FROM articles;")
+BAK_N=$(sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;")
+[ "$LIVE_N" = "$BAK_N" ] \
+  || { echo "ABORT: count mismatch (live $LIVE_N vs backup $BAK_N)"; rm -f "$BAK"; exit 1; }
+
+[ "$(md5 -q "$BAK")" = "$(md5 -q data/knowledge.db)" ] \
+  || { echo "ABORT: checkpoint is not byte-identical"; rm -f "$BAK"; exit 1; }
+
+echo "checkpoint verified: $BAK ($BAK_N articles)"
+
+# 4. Classify every OTHER backup by schema compatibility, not just age
+LIVE_SCHEMA=$(sqlite3 "file:data/knowledge.db?mode=ro" \
+  "SELECT group_concat(name) FROM pragma_table_info('articles');")
+for f in data/knowledge.db.bak.*; do
+  [ "$f" = "$BAK" ] && continue
+  S=$(sqlite3 "file:${f}?mode=ro" \
+        "SELECT group_concat(name) FROM pragma_table_info('articles');" 2>/dev/null || echo UNREADABLE)
+  if [ "$S" = "$LIVE_SCHEMA" ]; then echo "  SCHEMA-OK     $f"
+  else echo "  STALE-SCHEMA  $f   <- not a restore point regardless of age"; fi
+done
+
+# 5. Delete by explicit name from the approved list — NEVER `rm data/*.bak.*`,
 #    which would take the checkpoint you just made.
 ```
 
-Two things learned pruning 323 MB on 2026-07-31:
+Three things learned pruning 323 MB on 2026-07-31:
 
-- **Age is the real expiry, not count.** All 8 files removed predated the `public`
-  column, so restoring any would have lost the entire publication gate plus two weeks
-  of content. A backup older than your last schema migration is not a restore point.
-- **Prune only with a fresh checkpoint in hand.** Otherwise you trade clutter for
+- **Schema age is the real expiry, not calendar age.** All 8 files removed predated the
+  `public` column, so restoring any would have lost the entire publication gate plus two
+  weeks of content. A backup older than your last schema migration is not a restore
+  point — it is a rollback wearing a backup's filename.
+- **Prune only with a verified checkpoint in hand.** Otherwise you trade clutter for
   exposure — the newest file was 17 days stale and was the *only* full restore point.
+- **A verification that prints is not a verification.** The first version of this recipe
+  ended in `[ "$(md5 …)" = "$(md5 …)" ] && echo "byte-identical"`, which prints nothing
+  on mismatch and falls through to the delete step. Every check here now aborts.
 
-Check the live DB is idle first (`lsof data/knowledge.db`, no WAL sidecars) and that no
-scheduled job is about to fire — `00/06/12/18` content-pipeline, `00:00` draft-pipeline,
-`00:30` wiki-sync, `02:00` draft-reconciler.
+Check that no scheduled job is about to fire — `00/06/12/18` content-pipeline, `00:00`
+draft-pipeline, `00:30` wiki-sync, `02:00` draft-reconciler.
 
 ## Recipe: Restore from backup (disaster path — ask first, always)
 
