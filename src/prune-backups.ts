@@ -1,0 +1,488 @@
+#!/usr/bin/env tsx
+/**
+ * Backup retention pruner.
+ *
+ * WHAT: Takes a verified checkpoint of data/knowledge.db, then deletes the stale
+ *       `data/knowledge.db.bak.*` files — keeping the new checkpoint plus any backup
+ *       that is BOTH young enough AND schema-compatible with the live database.
+ * WHY:  Every destructive script snapshots the database (~80 MB) and nothing has ever
+ *       deleted one. `data/` reached 485 MB before anyone looked (PR #40).
+ *
+ * This replaces a hand-run bash recipe that took eleven review findings across four
+ * rounds. Three of those findings are not fixed here — they are *unrepresentable*:
+ *
+ *   - **Writer exclusion.** The recipe used `lsof`, which only observes: a scheduled job
+ *     could open the database a second after the check passed, and a commit landing in
+ *     the WAL leaves the main file byte-identical, so a hash check would pass over a
+ *     backup missing that commit. Here the copy happens inside `BEGIN EXCLUSIVE`, so
+ *     SQLite itself blocks other writers (verified: a second process gets SQLITE_BUSY).
+ *   - **Schema-signature collisions.** The recipe joined column metadata with a
+ *     delimiter, so `("a:b" TEXT)` and `(a "b:TEXT")` produced identical signatures.
+ *     Here schemas are compared as structured values; there is no delimiter to collide.
+ *   - **Empty-equals-empty.** A failed shell query returned "", and "" = "" compares
+ *     equal, so every backup read as compatible. Here a failed read throws or yields
+ *     null, which is never equal to a schema.
+ *
+ * Usage:
+ *   npm run prune-backups                     # DRY RUN (default) — reports, deletes nothing
+ *   npm run prune-backups -- --apply          # actually delete
+ *   npm run prune-backups -- --keep-days 60   # widen the age window
+ *
+ * Deleting backups is a stop-and-ask operation (CLAUDE.md). Dry-run is the default
+ * precisely so that a mistyped invocation reports instead of destroying the only
+ * restore points in the repo.
+ */
+
+import Database from "better-sqlite3";
+import { createHash } from "crypto";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "fs";
+import { join } from "path";
+import { pathToFileURL } from "url";
+
+// --- Paths ---
+const DATA_DIR = join(import.meta.dirname, "..", "data");
+const LIVE_DB = join(DATA_DIR, "knowledge.db");
+const BACKUP_PREFIX = "knowledge.db.bak.";
+const CHECKPOINT_INFIX = "checkpoint-";
+
+// --- Retention policy ---
+// WHAT: A backup is an eligible restore point only if it is young enough AND its schema
+//       still matches the live database.
+// WHY:  Age alone is not enough — a backup taken 10 days ago but before a migration 5
+//       days ago restores a schema the code no longer expects. The 8 files pruned in
+//       July all predated the `public` column, so any restore would have silently
+//       dropped the publication gate's fail-closed default (ADR-0001).
+const DEFAULT_KEEP_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// WHAT: Refuse to run if the live database looks wrong.
+// WHY:  A fully-failed run must record nothing and exit 1 rather than deleting restore
+//       points on the strength of a bad reading (the PR #15 rule).
+const MIN_LIVE_ARTICLES = 1;
+
+// --- Types ---
+
+export interface ColumnMeta {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+}
+
+export interface BackupEntry {
+  path: string;
+  name: string;
+  bytes: number;
+  mtime: Date;
+  schema: ColumnMeta[] | null; // null = unreadable
+}
+
+export type KeepReason = "fresh_checkpoint" | "within_age_and_schema_ok";
+export type PruneReason = "schema_mismatch" | "older_than_keep_days" | "unreadable";
+
+export interface Classification {
+  keep: Array<{ path: string; reason: KeepReason }>;
+  prune: Array<{ path: string; reason: PruneReason; bytes: number }>;
+}
+
+export interface Flags {
+  apply: boolean;
+  keepDays: number;
+}
+
+// --- Pure helpers (exported for tests) ---
+
+// WHAT: Structural schema equality.
+// WHY:  Compared field by field rather than as a joined string. The bash version used
+//       `cid:name:type:...` joined by `|`, which collides whenever a column name or
+//       type contains the delimiter. Here a collision cannot be expressed.
+export function schemasEqual(
+  a: ColumnMeta[] | null,
+  b: ColumnMeta[] | null
+): boolean {
+  // WHY: null means "could not read". Unknown is never equal to anything, including
+  //      another unknown — otherwise two unreadable files would compare as matching.
+  if (a === null || b === null) return false;
+  if (a.length !== b.length) return false;
+  return a.every((col, i) => {
+    const other = b[i];
+    return (
+      col.cid === other.cid &&
+      col.name === other.name &&
+      col.type === other.type &&
+      col.notnull === other.notnull &&
+      col.dflt_value === other.dflt_value &&
+      col.pk === other.pk
+    );
+  });
+}
+
+// WHAT: Decide which backups survive.
+// WHY:  Pure and side-effect free, so every branch is testable without a filesystem —
+//       the deletion set is the one thing in this script that must never be wrong.
+export function classifyBackups(input: {
+  entries: BackupEntry[];
+  liveSchema: ColumnMeta[];
+  checkpointPath: string;
+  now: Date;
+  keepDays: number;
+}): Classification {
+  const { entries, liveSchema, checkpointPath, now, keepDays } = input;
+  const keep: Classification["keep"] = [];
+  const prune: Classification["prune"] = [];
+
+  for (const entry of entries) {
+    // The checkpoint just taken is always kept — it is the restore point that makes
+    // pruning the others safe in the first place.
+    if (entry.path === checkpointPath) {
+      keep.push({ path: entry.path, reason: "fresh_checkpoint" });
+      continue;
+    }
+
+    if (entry.schema === null) {
+      prune.push({ path: entry.path, reason: "unreadable", bytes: entry.bytes });
+      continue;
+    }
+
+    const ageDays = (now.getTime() - entry.mtime.getTime()) / MS_PER_DAY;
+
+    // WHY: schema is checked BEFORE age. A young but schema-stale backup is not a
+    //      restore point, and reporting "older_than_keep_days" for it would name the
+    //      wrong reason in the summary.
+    if (!schemasEqual(entry.schema, liveSchema)) {
+      prune.push({ path: entry.path, reason: "schema_mismatch", bytes: entry.bytes });
+      continue;
+    }
+
+    if (ageDays > keepDays) {
+      prune.push({
+        path: entry.path,
+        reason: "older_than_keep_days",
+        bytes: entry.bytes,
+      });
+      continue;
+    }
+
+    keep.push({ path: entry.path, reason: "within_age_and_schema_ok" });
+  }
+
+  return { keep, prune };
+}
+
+// WHAT: Hand-rolled argv scan, matching every other script here.
+// WHY:  --apply rather than --dry-run: dry run is the DEFAULT. This deletes the only
+//       full restore points in the repo, so the safe mode is the one you get by
+//       omission. A deliberate deviation from the repo's usual `--dry-run` opt-in.
+export function parseArgs(argv: string[]): Flags {
+  const keepIdx = argv.indexOf("--keep-days");
+  let keepDays = DEFAULT_KEEP_DAYS;
+
+  if (keepIdx >= 0) {
+    const raw = argv[keepIdx + 1];
+    const parsed = Number(raw);
+    // WHY: reject rather than silently fall back to the default — a typo'd window that
+    //      quietly reverts to 30 days could delete backups the caller meant to keep.
+    if (!raw || !Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`--keep-days requires a non-negative number, got: ${raw ?? "(nothing)"}`);
+    }
+    keepDays = parsed;
+  }
+
+  return { apply: argv.includes("--apply"), keepDays };
+}
+
+// --- Database reads ---
+
+function readSchema(dbPath: string): ColumnMeta[] | null {
+  let db: InstanceType<typeof Database> | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const rows = db
+      .prepare(
+        `SELECT cid, name, type, "notnull", dflt_value, pk
+         FROM pragma_table_info('articles') ORDER BY cid`
+      )
+      .all() as ColumnMeta[];
+    // WHY: an empty result means no `articles` table — not a knowledge database at all.
+    return rows.length > 0 ? rows : null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+function sha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function listBackups(): BackupEntry[] {
+  return readdirSync(DATA_DIR)
+    .filter((n) => n.startsWith(BACKUP_PREFIX))
+    .map((name) => {
+      const path = join(DATA_DIR, name);
+      const stat = statSync(path);
+      return {
+        path,
+        name,
+        bytes: stat.size,
+        mtime: stat.mtime,
+        schema: readSchema(path),
+      };
+    })
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
+// --- Checkpoint ---
+
+interface CheckpointResult {
+  path: string;
+  articles: number;
+  bytes: number;
+}
+
+// WHAT: Copy the live database while holding SQLite's own exclusive write lock.
+// WHY:  This is the whole reason the procedure is a script. `BEGIN EXCLUSIVE` makes
+//       concurrent writers fail with SQLITE_BUSY for the duration, so no commit can
+//       land between the checkpoint and the copy. The bash recipe could only observe
+//       with `lsof` and hope. Verified: a second process attempting a write during the
+//       lock receives SQLITE_BUSY.
+function takeVerifiedCheckpoint(stamp: string): CheckpointResult {
+  const path = join(DATA_DIR, `${BACKUP_PREFIX}${CHECKPOINT_INFIX}${stamp}`);
+  if (existsSync(path)) {
+    throw new Error(`checkpoint already exists: ${path}`);
+  }
+
+  const db = new Database(LIVE_DB);
+  let liveArticles = 0;
+  let liveHash = "";
+
+  try {
+    // Fold any WAL content into the main file BEFORE locking, so the copy is complete.
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    db.exec("BEGIN EXCLUSIVE");
+
+    liveArticles = (
+      db.prepare("SELECT COUNT(*) AS n FROM articles").get() as { n: number }
+    ).n;
+    if (liveArticles < MIN_LIVE_ARTICLES) {
+      throw new Error(
+        `live database has ${liveArticles} articles (minimum ${MIN_LIVE_ARTICLES}) — refusing to prune on a suspect reading`
+      );
+    }
+
+    copyFileSync(LIVE_DB, path);
+    liveHash = sha256(LIVE_DB);
+    db.exec("COMMIT");
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Not in a transaction — nothing to roll back.
+    }
+    if (existsSync(path)) rmSync(path);
+    db.close();
+    throw err;
+  }
+  db.close();
+
+  // --- Verify the artifact itself, not our belief about it ---
+  // WHY: every check below removes the copy and throws. A verification that merely
+  //      reports leaves a bad checkpoint on disk looking like a good one.
+  const failVerification = (reason: string): never => {
+    rmSync(path, { force: true });
+    throw new Error(`checkpoint verification failed: ${reason}`);
+  };
+
+  const verify = new Database(path, { readonly: true });
+  let integrity: string;
+  let articles: number;
+  try {
+    integrity = (
+      verify.pragma("integrity_check") as Array<{ integrity_check: string }>
+    )[0].integrity_check;
+    articles = (
+      verify.prepare("SELECT COUNT(*) AS n FROM articles").get() as { n: number }
+    ).n;
+  } finally {
+    verify.close();
+  }
+
+  if (integrity !== "ok") failVerification(`integrity_check returned "${integrity}"`);
+  if (articles !== liveArticles) {
+    failVerification(`article count ${articles} != live ${liveArticles}`);
+  }
+  if (sha256(path) !== liveHash) {
+    failVerification("checkpoint is not byte-identical to the live database");
+  }
+  // WHY: a WAL appearing after the copy means a writer committed despite the lock.
+  //      Content-checked rather than existence-checked: wal_checkpoint(TRUNCATE) can
+  //      leave a legitimate zero-length sidecar behind.
+  const wal = `${LIVE_DB}-wal`;
+  if (existsSync(wal) && statSync(wal).size > 0) {
+    failVerification("a non-empty WAL exists after the copy — a writer was active");
+  }
+
+  return { path, articles, bytes: statSync(path).size };
+}
+
+// WHAT: Dry-run counterpart to takeVerifiedCheckpoint — proves the run COULD proceed.
+// WHY:  A dry run that skipped the database entirely would report a plan it has no
+//       evidence it can carry out. This takes and releases the same exclusive lock, so
+//       "another writer holds the database" fails in dry run rather than surfacing for
+//       the first time during the destructive run.
+function probeExclusiveAccess(): { articles: number } {
+  const db = new Database(LIVE_DB);
+  try {
+    db.exec("BEGIN EXCLUSIVE");
+    const articles = (
+      db.prepare("SELECT COUNT(*) AS n FROM articles").get() as { n: number }
+    ).n;
+    if (articles < MIN_LIVE_ARTICLES) {
+      throw new Error(
+        `live database has ${articles} articles (minimum ${MIN_LIVE_ARTICLES}) — refusing to prune on a suspect reading`
+      );
+    }
+    db.exec("COMMIT");
+    return { articles };
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Not in a transaction.
+    }
+    throw err;
+  } finally {
+    db.close();
+  }
+}
+
+// --- Main ---
+
+async function main(): Promise<void> {
+  const flags = parseArgs(process.argv.slice(2));
+
+  console.error("=== Backup retention pruner ===\n");
+  if (!flags.apply) console.error("  [DRY RUN — nothing will be deleted]\n");
+
+  if (!existsSync(LIVE_DB)) {
+    console.error(`Live database not found at ${LIVE_DB}`);
+    process.exit(1);
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
+
+  // WHAT: Only a real run writes the checkpoint.
+  // WHY:  The checkpoint is an ~80 MB copy. Writing one on every dry run means merely
+  //       *looking* at what would be pruned costs 80 MB of disk each time — surprising
+  //       for a read-only-sounding mode, and it accumulates. A dry run still proves the
+  //       lock can be taken and the database read, which is the part that could fail.
+  let checkpoint: CheckpointResult | null = null;
+
+  if (flags.apply) {
+    console.error("Taking verified checkpoint...");
+    checkpoint = takeVerifiedCheckpoint(stamp);
+    console.error(
+      `  ${checkpoint.path} — ${checkpoint.articles} articles, ${(checkpoint.bytes / 1024 / 1024).toFixed(1)} MB, verified\n`
+    );
+  } else {
+    const probe = probeExclusiveAccess();
+    console.error(
+      `  would checkpoint ${probe.articles} articles (exclusive lock available, database readable)\n`
+    );
+  }
+
+  const liveSchema = readSchema(LIVE_DB);
+  if (!liveSchema) {
+    if (checkpoint) rmSync(checkpoint.path, { force: true });
+    console.error("Could not read the live schema — refusing to classify backups.");
+    process.exit(1);
+  }
+
+  const entries = listBackups();
+  const { keep, prune } = classifyBackups({
+    entries,
+    liveSchema,
+    // WHY: on a dry run no checkpoint exists yet, so nothing is exempt. The preview is
+    //      still honest — a real run creates and keeps its checkpoint first, so the
+    //      prune set below is what would be deleted with a fresh restore point in hand.
+    checkpointPath: checkpoint?.path ?? "",
+    now: new Date(),
+    keepDays: flags.keepDays,
+  });
+
+  console.error(`Classification (keep-days: ${flags.keepDays}):`);
+  for (const k of keep) console.error(`  KEEP   ${k.reason.padEnd(26)} ${k.path}`);
+  for (const p of prune) console.error(`  PRUNE  ${p.reason.padEnd(26)} ${p.path}`);
+
+  const bytesToFree = prune.reduce((sum, p) => sum + p.bytes, 0);
+  console.error(
+    `\n  ${keep.length} kept, ${prune.length} to prune (${(bytesToFree / 1024 / 1024).toFixed(1)} MB)\n`
+  );
+
+  let deleted = 0;
+  if (flags.apply) {
+    // WHY: delete by explicit path from the classified list, never by glob. `rm
+    //      data/*.bak.*` would take the checkpoint just created along with the rest.
+    for (const p of prune) {
+      rmSync(p.path, { force: true });
+      deleted++;
+      console.error(`  deleted ${p.path}`);
+    }
+  }
+
+  console.log(
+    JSON.stringify({
+      dry_run: !flags.apply,
+      keep_days: flags.keepDays,
+      checkpoint: checkpoint?.path ?? null,
+      checkpoint_articles: checkpoint?.articles ?? null,
+      backups_total: entries.length,
+      kept: keep.length,
+      pruned: deleted,
+      prunable: prune.length,
+      bytes_freed: flags.apply ? bytesToFree : 0,
+      bytes_prunable: bytesToFree,
+      prune_reasons: prune.reduce<Record<string, number>>((acc, p) => {
+        acc[p.reason] = (acc[p.reason] ?? 0) + 1;
+        return acc;
+      }, {}),
+    })
+  );
+
+  console.error(
+    flags.apply
+      ? `\n=== Done: ${deleted} deleted, ${(bytesToFree / 1024 / 1024).toFixed(1)} MB freed ===`
+      : `\n=== Dry run: ${prune.length} would be deleted. Re-run with --apply ===`
+  );
+}
+
+// WHAT: Run main() only when this file is the process entry point.
+// WHY:  Every other script here self-executes at module scope, but this one is imported
+//       by its own test suite — and an unguarded main() runs the whole procedure on
+//       import, takes a real checkpoint, and calls process.exit(0) BEFORE any test
+//       executes. That is not hypothetical: it happened, and node:test reported
+//       "tests 1, pass 1" — a green suite in which not one assertion had run.
+//       A deliberate deviation from the repo's self-executing convention; the
+//       convention assumes nothing imports these modules, which is no longer true.
+const isEntryPoint =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  main()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error("prune-backups failed:", err instanceof Error ? err.message : err);
+      process.exit(1);
+    });
+}
