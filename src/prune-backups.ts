@@ -208,13 +208,17 @@ function readSchema(dbPath: string): SchemaObject[] | null {
   let db: InstanceType<typeof Database> | null = null;
   try {
     db = new Database(dbPath, { readonly: true });
-    // WHY: `sqlite_%` names are SQLite's own auto-created objects (autoindexes, the
-    //      sequence table). They are derived, not authored, so including them would
+    // WHY: `sqlite_`-prefixed names are SQLite's own auto-created objects (autoindexes,
+    //      the sequence table). They are derived, not authored, so including them would
     //      report spurious mismatches. Everything the migrations create is compared.
+    // WHY ESCAPE: `_` is a LIKE wildcard, so an unescaped 'sqlite_%' also matches
+    //      user-defined names such as `sqliteBackup` — silently excluding a real table
+    //      from the comparison. Verified: 'sqliteBackup' LIKE 'sqlite_%' is TRUE,
+    //      and FALSE once the underscore is escaped.
     const rows = db
       .prepare(
-        `SELECT type, name, tbl_name, sql FROM sqlite_master
-         WHERE name NOT LIKE 'sqlite_%'
+        String.raw`SELECT type, name, tbl_name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite\_%' ESCAPE '\'
          ORDER BY type, name`
       )
       .all() as SchemaObject[];
@@ -437,6 +441,7 @@ async function main(): Promise<void> {
 
   let deleted = 0;
   let failed = 0;
+  let skipped = 0;
   let bytesFreed = 0;
 
   if (flags.apply) {
@@ -449,15 +454,25 @@ async function main(): Promise<void> {
     //      data/*.bak.*` would take the checkpoint just created along with the rest.
     for (const p of prune) {
       try {
-        rmSync(p.path, { force: true });
+        // WHY no `force: true`: it swallows ENOENT, so a file another process already
+        //      removed would count as deleted and its bytes added to bytes_freed —
+        //      overstating what this run actually reclaimed. ENOENT is a distinct,
+        //      benign outcome and is reported as such.
+        rmSync(p.path);
         deleted++;
         bytesFreed += p.bytes;
         console.error(`  deleted ${p.path}`);
       } catch (err) {
-        failed++;
-        console.error(
-          `  FAILED to delete ${p.path}: ${err instanceof Error ? err.message : err}`
-        );
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === "ENOENT") {
+          skipped++;
+          console.error(`  already gone ${p.path}`);
+        } else {
+          failed++;
+          console.error(
+            `  FAILED to delete ${p.path}: ${err instanceof Error ? err.message : err}`
+          );
+        }
       }
     }
   }
@@ -472,6 +487,7 @@ async function main(): Promise<void> {
       kept: keep.length,
       pruned: deleted,
       failed,
+      skipped_already_gone: skipped,
       prunable: prune.length,
       // WHY: only bytes actually reclaimed. Reporting the full planned total would
       //      overstate the result whenever a deletion failed.
@@ -486,7 +502,7 @@ async function main(): Promise<void> {
 
   console.error(
     flags.apply
-      ? `\n=== Done: ${deleted} deleted${failed > 0 ? `, ${failed} FAILED` : ""}, ${(bytesFreed / 1024 / 1024).toFixed(1)} MB freed ===`
+      ? `\n=== Done: ${deleted} deleted${skipped > 0 ? `, ${skipped} already gone` : ""}${failed > 0 ? `, ${failed} FAILED` : ""}, ${(bytesFreed / 1024 / 1024).toFixed(1)} MB freed ===`
       : `\n=== Dry run: ${prune.length} would be deleted. Re-run with --apply ===`
   );
 
