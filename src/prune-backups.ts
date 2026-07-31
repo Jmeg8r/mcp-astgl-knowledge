@@ -69,13 +69,17 @@ const MIN_LIVE_ARTICLES = 1;
 
 // --- Types ---
 
-export interface ColumnMeta {
-  cid: number;
-  name: string;
+// WHAT: One row of sqlite_master — a table, index, trigger, view, or virtual table.
+// WHY:  Schema compatibility used to be judged from `pragma_table_info('articles')`
+//       alone, which cannot see a change to `chunks`, `vec_chunks`, `article_qa`,
+//       `ecosystem_snapshots`, `ideas`, or `rewrite_jobs`. A backup missing the
+//       `metrics` column added to ecosystem_snapshots this cycle would have classified
+//       as compatible. The whole schema is compared, not one table of it.
+export interface SchemaObject {
   type: string;
-  notnull: number;
-  dflt_value: string | null;
-  pk: number;
+  name: string;
+  tbl_name: string;
+  sql: string | null;
 }
 
 export interface BackupEntry {
@@ -83,7 +87,7 @@ export interface BackupEntry {
   name: string;
   bytes: number;
   mtime: Date;
-  schema: ColumnMeta[] | null; // null = unreadable
+  schema: SchemaObject[] | null; // null = unreadable
 }
 
 export type KeepReason = "fresh_checkpoint" | "within_age_and_schema_ok";
@@ -106,22 +110,20 @@ export interface Flags {
 //       `cid:name:type:...` joined by `|`, which collides whenever a column name or
 //       type contains the delimiter. Here a collision cannot be expressed.
 export function schemasEqual(
-  a: ColumnMeta[] | null,
-  b: ColumnMeta[] | null
+  a: SchemaObject[] | null,
+  b: SchemaObject[] | null
 ): boolean {
   // WHY: null means "could not read". Unknown is never equal to anything, including
   //      another unknown — otherwise two unreadable files would compare as matching.
   if (a === null || b === null) return false;
   if (a.length !== b.length) return false;
-  return a.every((col, i) => {
+  return a.every((obj, i) => {
     const other = b[i];
     return (
-      col.cid === other.cid &&
-      col.name === other.name &&
-      col.type === other.type &&
-      col.notnull === other.notnull &&
-      col.dflt_value === other.dflt_value &&
-      col.pk === other.pk
+      obj.type === other.type &&
+      obj.name === other.name &&
+      obj.tbl_name === other.tbl_name &&
+      obj.sql === other.sql
     );
   });
 }
@@ -131,7 +133,7 @@ export function schemasEqual(
 //       the deletion set is the one thing in this script that must never be wrong.
 export function classifyBackups(input: {
   entries: BackupEntry[];
-  liveSchema: ColumnMeta[];
+  liveSchema: SchemaObject[];
   checkpointPath: string;
   now: Date;
   keepDays: number;
@@ -202,17 +204,21 @@ export function parseArgs(argv: string[]): Flags {
 
 // --- Database reads ---
 
-function readSchema(dbPath: string): ColumnMeta[] | null {
+function readSchema(dbPath: string): SchemaObject[] | null {
   let db: InstanceType<typeof Database> | null = null;
   try {
     db = new Database(dbPath, { readonly: true });
+    // WHY: `sqlite_%` names are SQLite's own auto-created objects (autoindexes, the
+    //      sequence table). They are derived, not authored, so including them would
+    //      report spurious mismatches. Everything the migrations create is compared.
     const rows = db
       .prepare(
-        `SELECT cid, name, type, "notnull", dflt_value, pk
-         FROM pragma_table_info('articles') ORDER BY cid`
+        `SELECT type, name, tbl_name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name`
       )
-      .all() as ColumnMeta[];
-    // WHY: an empty result means no `articles` table — not a knowledge database at all.
+      .all() as SchemaObject[];
+    // WHY: an empty result means no schema at all — not a knowledge database.
     return rows.length > 0 ? rows : null;
   } catch {
     return null;
@@ -430,13 +436,29 @@ async function main(): Promise<void> {
   );
 
   let deleted = 0;
+  let failed = 0;
+  let bytesFreed = 0;
+
   if (flags.apply) {
+    // WHY: each deletion is isolated. rmSync can throw (EACCES, EBUSY, a file removed
+    //      by someone else mid-run), and an escaping throw would skip the JSON summary
+    //      below entirely — so a run that deleted four of seven files would report
+    //      NOTHING while having destroyed four restore points. A partially-completed
+    //      destructive run is exactly when the summary matters most.
     // WHY: delete by explicit path from the classified list, never by glob. `rm
     //      data/*.bak.*` would take the checkpoint just created along with the rest.
     for (const p of prune) {
-      rmSync(p.path, { force: true });
-      deleted++;
-      console.error(`  deleted ${p.path}`);
+      try {
+        rmSync(p.path, { force: true });
+        deleted++;
+        bytesFreed += p.bytes;
+        console.error(`  deleted ${p.path}`);
+      } catch (err) {
+        failed++;
+        console.error(
+          `  FAILED to delete ${p.path}: ${err instanceof Error ? err.message : err}`
+        );
+      }
     }
   }
 
@@ -449,8 +471,11 @@ async function main(): Promise<void> {
       backups_total: entries.length,
       kept: keep.length,
       pruned: deleted,
+      failed,
       prunable: prune.length,
-      bytes_freed: flags.apply ? bytesToFree : 0,
+      // WHY: only bytes actually reclaimed. Reporting the full planned total would
+      //      overstate the result whenever a deletion failed.
+      bytes_freed: bytesFreed,
       bytes_prunable: bytesToFree,
       prune_reasons: prune.reduce<Record<string, number>>((acc, p) => {
         acc[p.reason] = (acc[p.reason] ?? 0) + 1;
@@ -461,9 +486,13 @@ async function main(): Promise<void> {
 
   console.error(
     flags.apply
-      ? `\n=== Done: ${deleted} deleted, ${(bytesToFree / 1024 / 1024).toFixed(1)} MB freed ===`
+      ? `\n=== Done: ${deleted} deleted${failed > 0 ? `, ${failed} FAILED` : ""}, ${(bytesFreed / 1024 / 1024).toFixed(1)} MB freed ===`
       : `\n=== Dry run: ${prune.length} would be deleted. Re-run with --apply ===`
   );
+
+  // WHY: a run with failures exits 1 so a caller notices — but only AFTER the summary
+  //      has been written, so what did happen is still on the record.
+  if (failed > 0) process.exitCode = 1;
 }
 
 // WHAT: Run main() only when this file is the process entry point.

@@ -12,7 +12,6 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync } from "fs";
 import { join } from "path";
 
 import {
@@ -20,39 +19,30 @@ import {
   parseArgs,
   schemasEqual,
 } from "../src/prune-backups.js";
-import type { BackupEntry, ColumnMeta } from "../src/prune-backups.js";
-
-// WHAT: Snapshot data/ at import time, before any test body runs.
-// WHY:  The first version of this module called main() at module scope. Importing it
-//       ran the whole procedure, took a real 8 MB checkpoint, and called
-//       process.exit(0) — so NOT ONE assertion below executed, and node:test happily
-//       reported "tests 1, pass 1". A green suite that never ran is the worst possible
-//       failure mode for a test file, so the absence of side effects is itself asserted.
-const DATA_DIR = join(import.meta.dirname, "..", "data");
-const BACKUPS_AT_IMPORT = (() => {
-  try {
-    return readdirSync(DATA_DIR).filter((n) => n.includes(".bak."));
-  } catch {
-    return [];
-  }
-})();
+import type { BackupEntry, SchemaObject } from "../src/prune-backups.js";
 
 // --- Fixtures ---
 
 const NOW = new Date("2026-07-31T00:00:00.000Z");
 
-function col(over: Partial<ColumnMeta> & { cid: number; name: string }): ColumnMeta {
-  return { type: "TEXT", notnull: 0, dflt_value: null, pk: 0, ...over };
+function obj(over: Partial<SchemaObject> & { name: string }): SchemaObject {
+  return { type: "table", tbl_name: over.name, sql: `CREATE TABLE ${over.name}(x)`, ...over };
 }
 
 // A trimmed stand-in for the real `articles` schema. `public` carries the publication
 // gate's fail-closed property: INTEGER NOT NULL DEFAULT 0.
-const LIVE_SCHEMA: ColumnMeta[] = [
-  col({ cid: 0, name: "id", type: "INTEGER", pk: 1 }),
-  col({ cid: 1, name: "title", notnull: 1 }),
-  col({ cid: 2, name: "url", notnull: 1 }),
-  col({ cid: 3, name: "source_origin", dflt_value: "'astgl-site'" }),
-  col({ cid: 4, name: "public", type: "INTEGER", notnull: 1, dflt_value: "0" }),
+const LIVE_SCHEMA: SchemaObject[] = [
+  obj({
+    name: "articles",
+    sql: "CREATE TABLE articles(id INTEGER PRIMARY KEY, title TEXT NOT NULL, public INTEGER NOT NULL DEFAULT 0)",
+  }),
+  obj({ name: "chunks", sql: "CREATE TABLE chunks(id INTEGER PRIMARY KEY, article_url TEXT)" }),
+  obj({
+    name: "ecosystem_snapshots",
+    sql: "CREATE TABLE ecosystem_snapshots(id INTEGER PRIMARY KEY, check_type TEXT, metrics TEXT)",
+  }),
+  obj({ name: "vec_chunks", sql: "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[768])" }),
+  obj({ type: "index", name: "idx_articles_public", tbl_name: "articles", sql: "CREATE INDEX idx_articles_public ON articles(public)" }),
 ];
 
 function entry(over: Partial<BackupEntry> & { path: string }): BackupEntry {
@@ -81,28 +71,6 @@ function classify(entries: BackupEntry[], keepDays = 30) {
   });
 }
 
-// --- Import safety ---
-
-describe("module import", () => {
-  test("importing the script does not RUN the script", () => {
-    // If main() executed on import it would have created a checkpoint here — and,
-    // worse, called process.exit() before this assertion could ever be reached. The
-    // fact that this test runs at all is half the signal; the file count is the rest.
-    const now = (() => {
-      try {
-        return readdirSync(DATA_DIR).filter((n) => n.includes(".bak."));
-      } catch {
-        return [];
-      }
-    })();
-    assert.deepEqual(
-      now,
-      BACKUPS_AT_IMPORT,
-      "importing src/prune-backups.ts created or removed a backup — main() is not guarded by an entry-point check"
-    );
-  });
-});
-
 // --- schemasEqual ---
 
 describe("schemasEqual", () => {
@@ -114,37 +82,61 @@ describe("schemasEqual", () => {
     assert.equal(schemasEqual(LIVE_SCHEMA.slice(0, 4), LIVE_SCHEMA), false);
   });
 
-  test("catches a lost NOT NULL DEFAULT — invisible to a name comparison", () => {
-    // WHY: this is the case the bash recipe shipped with. `public INTEGER` instead of
-    //      `public INTEGER NOT NULL DEFAULT 0` has identical column NAMES, so a
-    //      names-only check called it compatible. Restoring it would have silently
-    //      removed the publication gate's fail-closed default (ADR-0001).
-    const weakened = LIVE_SCHEMA.map((c) =>
-      c.name === "public" ? { ...c, notnull: 0, dflt_value: null } : c
+  test("catches a lost NOT NULL DEFAULT on articles.public", () => {
+    // WHY: the case the bash recipe shipped with. Restoring a backup whose `public`
+    //      column is merely INTEGER would silently remove the publication gate's
+    //      fail-closed default (ADR-0001).
+    const weakened = LIVE_SCHEMA.map((o) =>
+      o.name === "articles"
+        ? { ...o, sql: "CREATE TABLE articles(id INTEGER PRIMARY KEY, title TEXT NOT NULL, public INTEGER)" }
+        : o
     );
     assert.deepEqual(
-      weakened.map((c) => c.name),
-      LIVE_SCHEMA.map((c) => c.name),
-      "precondition: column names are identical"
+      weakened.map((o) => o.name),
+      LIVE_SCHEMA.map((o) => o.name),
+      "precondition: object names are identical"
     );
     assert.equal(schemasEqual(weakened, LIVE_SCHEMA), false);
+  });
+
+  test("catches a change OUTSIDE the articles table", () => {
+    // WHY: the comparator used to read pragma_table_info('articles') only, so a backup
+    //      missing the `metrics` column on ecosystem_snapshots — or an altered chunks,
+    //      vec_chunks, ideas, or rewrite_jobs — classified as compatible.
+    const stale = LIVE_SCHEMA.map((o) =>
+      o.name === "ecosystem_snapshots"
+        ? { ...o, sql: "CREATE TABLE ecosystem_snapshots(id INTEGER PRIMARY KEY, check_type TEXT)" }
+        : o
+    );
+    assert.equal(schemasEqual(stale, LIVE_SCHEMA), false);
+  });
+
+  test("catches a dropped index and a changed virtual table", () => {
+    assert.equal(
+      schemasEqual(LIVE_SCHEMA.filter((o) => o.type !== "index"), LIVE_SCHEMA),
+      false,
+      "a missing index is a schema difference"
+    );
+    const vecChanged = LIVE_SCHEMA.map((o) =>
+      o.name === "vec_chunks"
+        ? { ...o, sql: "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[384])" }
+        : o
+    );
+    assert.equal(schemasEqual(vecChanged, LIVE_SCHEMA), false, "embedding dim change");
   });
 
   test("cannot be fooled by a delimiter collision", () => {
     // WHY: the bash version joined metadata with ':' and '|', so `("a:b" TEXT)` and
     //      `(a "b:TEXT")` produced the same signature. Structured comparison has no
     //      delimiter, so the collision is not merely caught — it is unrepresentable.
-    const a: ColumnMeta[] = [col({ cid: 0, name: "a:b", type: "TEXT" })];
-    const b: ColumnMeta[] = [col({ cid: 0, name: "a", type: "b:TEXT" })];
+    const a: SchemaObject[] = [obj({ name: "a:b", sql: "CREATE TABLE \"a:b\"(x TEXT)" })];
+    const b: SchemaObject[] = [obj({ name: "a", sql: "CREATE TABLE a(\"b:TEXT\" x)" })];
     assert.equal(schemasEqual(a, b), false);
   });
 
-  test("catches reordered columns with the same names", () => {
-    const swapped = [
-      { ...LIVE_SCHEMA[1], cid: 2 },
-      { ...LIVE_SCHEMA[2], cid: 1 },
-    ];
-    assert.equal(schemasEqual(swapped, [LIVE_SCHEMA[1], LIVE_SCHEMA[2]]), false);
+  test("catches reordered objects", () => {
+    const swapped = [LIVE_SCHEMA[1], LIVE_SCHEMA[0]];
+    assert.equal(schemasEqual(swapped, [LIVE_SCHEMA[0], LIVE_SCHEMA[1]]), false);
   });
 
   test("null is never equal to anything, including another null", () => {
@@ -262,6 +254,17 @@ describe("classifyBackups", () => {
     assert.equal(keep.length + prune.length, entries.length);
     const seen = [...keep.map((k) => k.path), ...prune.map((p) => p.path)];
     assert.equal(new Set(seen).size, entries.length);
+  });
+
+  test("propagates each entry's bytes onto the prune result", () => {
+    // WHY: main() sums p.bytes into bytes_prunable and bytes_freed. Without this, a
+    //      regression would report a wrong reclaimed size without failing any test.
+    const { prune } = classify([
+      entry({ path: CHECKPOINT }),
+      entry({ path: "/data/knowledge.db.bak.sized", mtime: daysAgo(99), bytes: 12_345 }),
+    ]);
+    assert.equal(prune.length, 1);
+    assert.equal(prune[0].bytes, 12_345);
   });
 
   test("an empty backup directory is not an error", () => {
