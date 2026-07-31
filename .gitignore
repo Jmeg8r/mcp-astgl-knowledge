@@ -17,6 +17,16 @@ data/wiki-sync-state.json
 logs/
 # Timestamped db backups: catches both `.bak.<reason>` and `.bak-<reason>` forms
 data/*.bak*
+# Stray databases at the repo ROOT. Root-anchored on purpose: every database in
+# this project lives under data/ or build/, so anything matching here was created
+# by a command run from the wrong directory (a bare `sqlite3 knowledge.db`
+# instead of `data/knowledge.db`). One such 0-byte file sat here untracked and
+# un-gitignored from 2026-07-28 until 2026-07-31, one `git add -A` away from
+# being committed alongside the real 80 MB database.
+# Do NOT unanchor this — `*.db` would also match data/knowledge.db, which is tracked.
+/*.db
+/*.db-wal
+/*.db-shm
 .claude/worktrees/
 .claude/settings.local.json
 # Local editor/tool config (aikido rules are tool-generated)

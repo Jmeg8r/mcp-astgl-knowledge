@@ -128,10 +128,40 @@ git-tracked, and a checkpoint changes the file git sees.
 
 ## Recipe: Backup pruning (ask-first — this deletes files)
 
-`data/*.bak.*` grows unbounded (reconciler snapshots ~50 MB each). List with sizes and
-dates, propose keeping the newest of each kind plus anything younger than 30 days, and
-delete only what James approves, by name. These are the LAST-RESORT restore points
-for every mistake this skill exists to prevent — when in doubt, keep.
+`data/*.bak.*` grows unbounded (reconciler snapshots ~80 MB each). These are the
+LAST-RESORT restore points for every mistake this skill exists to prevent — when in
+doubt, keep. List with sizes and dates, propose a retention, and delete only what James
+approves, **by explicit name**.
+
+Retention rule: **keep the newest checkpoint plus anything younger than 30 days.**
+
+```bash
+# 1. Inventory — always show sizes and dates before proposing anything
+ls -la data/*.bak.* | awk '{printf "%8.1f MB  %s %s %s  %s\n", $5/1024/1024, $6,$7,$8, $9}'
+du -ch data/*.bak.* | tail -1
+
+# 2. Take a CURRENT checkpoint first, and verify it before deleting anything
+BAK="data/knowledge.db.bak.checkpoint-$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+cp data/knowledge.db "$BAK"
+sqlite3 "file:${BAK}?mode=ro" "PRAGMA integrity_check;"
+sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;"   # must match live
+[ "$(md5 -q "$BAK")" = "$(md5 -q data/knowledge.db)" ] && echo "byte-identical"
+
+# 3. Delete by name from the approved list — NEVER `rm data/*.bak.*`,
+#    which would take the checkpoint you just made.
+```
+
+Two things learned pruning 323 MB on 2026-07-31:
+
+- **Age is the real expiry, not count.** All 8 files removed predated the `public`
+  column, so restoring any would have lost the entire publication gate plus two weeks
+  of content. A backup older than your last schema migration is not a restore point.
+- **Prune only with a fresh checkpoint in hand.** Otherwise you trade clutter for
+  exposure — the newest file was 17 days stale and was the *only* full restore point.
+
+Check the live DB is idle first (`lsof data/knowledge.db`, no WAL sidecars) and that no
+scheduled job is about to fire — `00/06/12/18` content-pipeline, `00:00` draft-pipeline,
+`00:30` wiki-sync, `02:00` draft-reconciler.
 
 ## Recipe: Restore from backup (disaster path — ask first, always)
 
