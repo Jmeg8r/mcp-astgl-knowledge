@@ -388,11 +388,27 @@ function probeExclusiveAccess(): { articles: number } {
   }
 }
 
+// WHAT: Counters every summary carries, whatever the outcome.
+// WHY:  A scheduler parsing stdout must find the same fields whether the run
+//       succeeded, refused, or partly failed. Emitting one shape on success and a
+//       different one on a fatal path means the consumer has to branch on shape
+//       before it can read a count — so the counters are part of the type.
+interface SummaryCounters {
+  processed: number;
+  skipped: number;
+  failed: number;
+}
+
+const ZERO_COUNTERS: SummaryCounters = { processed: 0, skipped: 0, failed: 0 };
+
 // WHAT: The one and only stdout write.
 // WHY:  The pipeline contract is exactly ONE final JSON line on stdout. Routing every
 //       exit path — success, refusal, partial failure — through a single function is
-//       what makes that checkable rather than aspirational.
-function emitSummary(summary: Record<string, unknown>): void {
+//       what makes that checkable rather than aspirational. The signature requires the
+//       counters, so a new exit path cannot omit them by forgetting.
+function emitSummary(
+  summary: SummaryCounters & Record<string, unknown>
+): void {
   console.log(JSON.stringify(summary));
 }
 
@@ -409,7 +425,12 @@ async function main(): Promise<void> {
     // WHY: emit before failing. A fatal path that exits without the summary leaves
     //      MAESTER and any scheduler parsing stdout with nothing at all — the same
     //      defect as the deletion loop's escaping throw, on a different branch.
-    emitSummary({ ok: false, error: "live_db_missing", dry_run: !flags.apply });
+    emitSummary({
+      ok: false,
+      error: "live_db_missing",
+      dry_run: !flags.apply,
+      ...ZERO_COUNTERS,
+    });
     process.exitCode = 1;
     return;
   }
@@ -445,6 +466,7 @@ async function main(): Promise<void> {
       error: "live_schema_unreadable",
       dry_run: !flags.apply,
       checkpoint: null,
+      ...ZERO_COUNTERS,
     });
     process.exitCode = 1;
     return;
@@ -517,9 +539,11 @@ async function main(): Promise<void> {
       checkpoint_articles: checkpoint?.articles ?? null,
       backups_total: entries.length,
       kept: keep.length,
-      pruned: deleted,
+      // WHAT: the three contract counters, present on every summary shape.
+      processed: entries.length,
+      skipped,
       failed,
-      skipped_already_gone: skipped,
+      pruned: deleted,
       prunable: prune.length,
       // WHY: only bytes actually reclaimed. Reporting the full planned total would
       //      overstate the result whenever a deletion failed.
