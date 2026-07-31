@@ -36,9 +36,11 @@
 import Database from "better-sqlite3";
 import { createHash } from "crypto";
 import {
+  closeSync,
   copyFileSync,
   existsSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
   rmSync,
   statSync,
@@ -72,6 +74,17 @@ const MIN_LIVE_ARTICLES = 1;
 //       printed; an inline 1024 in one place and 1000 in another is how two figures
 //       in the same report come to disagree.
 const BYTES_PER_MIB = 1024 * 1024;
+
+// WHAT: Read size for content hashing.
+// WHY:  Constant peak memory regardless of database size; 1 MiB is large enough that
+//       syscall overhead is negligible on an 80 MB file.
+const HASH_BLOCK_BYTES = 1024 * 1024;
+
+// WHAT: SQLite sidecars that belong to a database file rather than standing alone.
+// WHY:  A `-wal`/`-shm` beside a backup is part of THAT backup, not a backup of its
+//       own. Listing them separately would classify a fragment as a restore point and
+//       could delete a base file while leaving its WAL, or vice versa.
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
 const MIB_DECIMAL_PLACES = 1;
 
 // --- Types ---
@@ -243,20 +256,47 @@ function readSchema(dbPath: string): SchemaObject[] | null {
   }
 }
 
+// WHAT: Content hash, read in fixed-size blocks.
+// WHY:  readFileSync allocated the ENTIRE file — ~80 MB here — and sha256 is called
+//       three times per apply run, so peak memory tracked database size. Block reads
+//       keep it constant. Kept synchronous so takeVerifiedCheckpoint can stay sync and
+//       hold BEGIN EXCLUSIVE across the copy without an await in the critical section.
 function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(HASH_BLOCK_BYTES);
+  try {
+    let bytesRead: number;
+    while ((bytesRead = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
 function listBackups(): BackupEntry[] {
-  return readdirSync(DATA_DIR)
-    .filter((n) => n.startsWith(BACKUP_PREFIX))
+  const names = readdirSync(DATA_DIR).filter((n) => n.startsWith(BACKUP_PREFIX));
+
+  return names
+    // WHY: a `-wal`/`-shm` belongs to the backup it sits beside. Treating one as a
+    //      standalone backup would classify a fragment as a restore point, and could
+    //      delete a base file while orphaning its WAL.
+    .filter((n) => !SQLITE_SIDECAR_SUFFIXES.some((suffix) => n.endsWith(suffix)))
     .map((name) => {
       const path = join(DATA_DIR, name);
       const stat = statSync(path);
+      // WHAT: size includes any sidecars, since they are removed with the base file.
+      // WHY:  bytes_freed would otherwise understate what a prune actually reclaimed.
+      const sidecarBytes = SQLITE_SIDECAR_SUFFIXES.reduce((sum, suffix) => {
+        const sidecar = `${path}${suffix}`;
+        return existsSync(sidecar) ? sum + statSync(sidecar).size : sum;
+      }, 0);
       return {
         path,
         name,
-        bytes: stat.size,
+        bytes: stat.size + sidecarBytes,
         mtime: stat.mtime,
         schema: readSchema(path),
       };
@@ -534,6 +574,12 @@ async function main(): Promise<void> {
         //      overstating what this run actually reclaimed. ENOENT is a distinct,
         //      benign outcome and is reported as such.
         rmSync(p.path);
+        // WHY: sidecars are part of this backup; leaving them orphans WAL fragments
+        //      in data/ that no later run would recognise as belonging to anything.
+        for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+          const sidecar = `${p.path}${suffix}`;
+          if (existsSync(sidecar)) rmSync(sidecar);
+        }
         deleted++;
         bytesFreed += p.bytes;
         console.error(`  deleted ${p.path}`);
@@ -553,7 +599,10 @@ async function main(): Promise<void> {
   }
 
   emitSummary({
-      ok: true,
+      // WHY: a run that failed to delete something is not ok, however many others
+      //      succeeded. Reporting ok:true alongside failed:2 asks the consumer to
+      //      ignore the field that exists to be trusted.
+      ok: failed === 0,
       dry_run: !flags.apply,
       keep_days: flags.keepDays,
       checkpoint: checkpoint?.path ?? null,
@@ -600,23 +649,26 @@ const isEntryPoint =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntryPoint) {
-  main()
-    // WHY: honour an exitCode main() set on a fatal path — a bare exit(0) here would
-    //      override it and report success after refusing to run.
-    .then(() => process.exit(process.exitCode ?? 0))
-    .catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("prune-backups failed:", message);
-      // WHY: found by sweeping the class rather than patching the reported instance.
-      //      Anything main() throws — a busy exclusive lock, a checkpoint that failed
-      //      verification — reached here and exited with NO json at all, which is the
-      //      same contract break as the two exits fixed last round.
-      emitSummary({
-        ok: false,
-        error: "unexpected_error",
-        message,
-        ...ZERO_COUNTERS,
-      });
-      process.exit(1);
+  // WHY no process.exit(): it terminates before an async stdout pipe has drained, so
+  //      the JSON summary can be TRUNCATED for exactly the consumer that parses it —
+  //      MAESTER reads this over a pipe. Setting exitCode lets node exit naturally
+  //      once stdout is flushed. main() also sets exitCode on its own fatal paths.
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("prune-backups failed:", message);
+    // WHY: found by sweeping the class rather than patching the reported instance.
+    //      Anything main() throws — a busy exclusive lock, a checkpoint that failed
+    //      verification — reached here and exited with NO json at all.
+    emitSummary({
+      ok: false,
+      error: "unexpected_error",
+      message,
+      // WHY: every other summary carries dry_run; a consumer must be able to tell a
+      //      failed dry run from a failed apply run. Read from argv because flags may
+      //      not have been parsed when the throw happened.
+      dry_run: !process.argv.includes("--apply"),
+      ...ZERO_COUNTERS,
     });
+    process.exitCode = 1;
+  });
 }
