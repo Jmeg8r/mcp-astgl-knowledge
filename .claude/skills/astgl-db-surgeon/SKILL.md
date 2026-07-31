@@ -148,9 +148,23 @@ migration date (verified both directions before this was written: a fixture miss
 set -euo pipefail   # every check below ABORTS; none of them merely print
 
 # 0. Preflight — BEFORE the checkpoint and long before any delete.
-#    Scheduled jobs: 00/06/12/18 content-pipeline, 00:00 draft-pipeline,
-#    00:30 wiki-sync, 02:00 draft-reconciler. If one fires mid-prune the
-#    checkpoint is a torn snapshot. Confirm none is imminent, then:
+#
+#    STOP THE WRITERS FIRST. `lsof` is a point-in-time read: it cannot stop a
+#    scheduled job from opening the database one second later. Worse, a writer
+#    that commits to data/knowledge.db-wal after the copy leaves the MAIN file
+#    byte-identical, so the md5 check below would pass while the backup silently
+#    omits that commit. There is no lock these pipelines honour, so exclusion has
+#    to be operational:
+#
+#      launchctl bootout gui/$UID/ai.astgl.knowledge.<job>     # for each job
+#      … prune …
+#      launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.astgl.knowledge.<job>.plist
+#
+#    Booting jobs out is STOP-AND-ASK (CLAUDE.md) — get James's approval, do not
+#    do it unilaterally. Jobs: 00/06/12/18 content-pipeline, 00:00 draft-pipeline,
+#    00:30 wiki-sync, 02:00 draft-reconciler. If stopping them is not acceptable,
+#    run the prune in a window well clear of all four and accept that step 3's
+#    re-check is detection, not prevention.
 command -v lsof >/dev/null 2>&1 \
   || { echo "ABORT: lsof unavailable — cannot verify the database is idle"; exit 1; }
 # WHY tri-state: `! lsof … || abort` treats EVERY nonzero exit as "no handles",
@@ -185,6 +199,15 @@ BAK_N=$(sqlite3 "file:${BAK}?mode=ro" "SELECT COUNT(*) FROM articles;")
 [ "$(md5 -q "$BAK")" = "$(md5 -q data/knowledge.db)" ] \
   || { echo "ABORT: checkpoint is not byte-identical"; rm -f "$BAK"; exit 1; }
 
+# Post-copy race detection. A writer that opened AFTER step 0 and committed to a
+# new WAL leaves the main file unchanged, so the md5 above passes while the copy
+# is missing that commit. A -wal appearing now is proof of exactly that.
+[ ! -f data/knowledge.db-wal ] \
+  || { echo "ABORT: a WAL appeared during the copy — a writer was active; checkpoint is not trustworthy"; rm -f "$BAK"; exit 1; }
+RC2=0; lsof data/knowledge.db >/dev/null 2>&1 || RC2=$?
+[ "$RC2" = "1" ] \
+  || { echo "ABORT: database became busy during the copy (lsof rc=$RC2)"; rm -f "$BAK"; exit 1; }
+
 echo "checkpoint verified: $BAK ($BAK_N articles)"
 
 # 4. Classify every OTHER backup by schema compatibility, not just age.
@@ -192,11 +215,15 @@ echo "checkpoint verified: $BAK ($BAK_N articles)"
 #    DEFAULT, pk or ordering change. Verified — a backup whose `public` column
 #    lost `NOT NULL DEFAULT 0` (the gate's fail-closed property) passes a
 #    names-only check and is rejected by this one.
-SCHEMA_SQL="SELECT group_concat(sig,'|') FROM (
-  SELECT cid||':'||name||':'||type||':'||\"notnull\"||':'||COALESCE(dflt_value,'')||':'||pk AS sig
-  FROM pragma_table_info('articles') ORDER BY cid);"
+# WHY -json and not a delimiter-joined string: a `:`-joined signature COLLIDES.
+# `("a:b" TEXT)` and `(a "b:TEXT")` both render as `0:a:b:TEXT:0::0`, so an
+# incompatible backup would classify SCHEMA-OK. Verified — the two differ under
+# -json, which quotes and escapes each field. (Requires sqlite3 ≥ 3.33.)
+SCHEMA_SQL="SELECT cid, name, type, \"notnull\", COALESCE(dflt_value,'') AS dflt, pk
+  FROM pragma_table_info('articles') ORDER BY cid;"
+schema_of() { sqlite3 -json "file:$1?mode=ro" "$SCHEMA_SQL" 2>/dev/null || true; }
 
-LIVE_SCHEMA=$(sqlite3 "file:data/knowledge.db?mode=ro" "$SCHEMA_SQL")
+LIVE_SCHEMA=$(schema_of data/knowledge.db)
 # WHY this guard: a failed query returns "", and "" = "" compares EQUAL — every
 # backup would be reported SCHEMA-OK by comparing nothing to nothing. This exact
 # false match happened while developing this recipe (a double-quoted SQL literal
@@ -206,7 +233,7 @@ LIVE_SCHEMA=$(sqlite3 "file:data/knowledge.db?mode=ro" "$SCHEMA_SQL")
 
 for f in data/knowledge.db.bak.*; do
   [ "$f" = "$BAK" ] && continue
-  S=$(sqlite3 "file:${f}?mode=ro" "$SCHEMA_SQL" 2>/dev/null || true)
+  S=$(schema_of "$f")
   if [ -z "$S" ]; then echo "  UNREADABLE    $f   <- treat as NOT a restore point"
   elif [ "$S" = "$LIVE_SCHEMA" ]; then echo "  SCHEMA-OK     $f"
   else echo "  STALE-SCHEMA  $f   <- not a restore point regardless of age"; fi

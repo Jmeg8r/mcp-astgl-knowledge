@@ -135,14 +135,23 @@ only if it satisfies **both** conditions — not either:
   just names, because a type / `NOT NULL` / `DEFAULT` / pk / ordering change is invisible
   to a name list. Verified: a backup whose `public` column lost `NOT NULL DEFAULT 0` — the
   gate's fail-closed property — passes a names-only check.
-  ```sql
-  SELECT group_concat(sig,'|') FROM (
-    SELECT cid||':'||name||':'||type||':'||"notnull"||':'||COALESCE(dflt_value,'')||':'||pk AS sig
-    FROM pragma_table_info('articles') ORDER BY cid);
+  ```bash
+  sqlite3 -json "file:<db>?mode=ro" \
+    "SELECT cid, name, type, \"notnull\", COALESCE(dflt_value,'') AS dflt, pk
+     FROM pragma_table_info('articles') ORDER BY cid;"
   ```
+  **`-json`, not a delimiter-joined string.** A `:`-joined signature collides —
+  `("a:b" TEXT)` and `(a "b:TEXT")` both render as `0:a:b:TEXT:0::0`, so an incompatible
+  backup would classify compatible. Verified: the two differ under `-json`.
   Assert the result is **non-empty** before comparing: a failed query returns `""`, and
   `"" = ""` compares equal, so every backup would be reported compatible by comparing
   nothing to nothing.
+- **Stop the writers, don't just check them.** `lsof` is a point-in-time read and cannot
+  stop a scheduled job opening the database a second later. A writer that commits to
+  `knowledge.db-wal` after the copy leaves the **main file byte-identical**, so an md5
+  check passes while the backup omits that commit. Boot the launchd jobs out for the
+  duration (itself stop-and-ask), or run well clear of all four schedules and treat the
+  post-copy WAL/lsof re-check as detection rather than prevention.
 - **Before pruning, take a fresh checkpoint** (`…bak.checkpoint-<ISO>`) and verify it —
   WAL-checkpoint first if sidecars exist, then `PRAGMA integrity_check`, row counts against
   the live DB, and an `md5` comparison. **Every check must abort on failure**, not print:
