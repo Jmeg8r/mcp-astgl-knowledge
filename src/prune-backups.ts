@@ -67,6 +67,13 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 //       points on the strength of a bad reading (the PR #15 rule).
 const MIN_LIVE_ARTICLES = 1;
 
+// WHAT: Byte-to-MiB display conversion.
+// WHY:  Named so the same divisor and precision are used everywhere a size is
+//       printed; an inline 1024 in one place and 1000 in another is how two figures
+//       in the same report come to disagree.
+const BYTES_PER_MIB = 1024 * 1024;
+const MIB_DECIMAL_PLACES = 1;
+
 // --- Types ---
 
 // WHAT: One row of sqlite_master — a table, index, trigger, view, or virtual table.
@@ -204,6 +211,11 @@ export function parseArgs(argv: string[]): Flags {
 
 // --- Database reads ---
 
+// WHAT: Read a database's complete authored schema — every table, index, trigger,
+//       view and virtual table it declares — or null if the file cannot be opened or
+//       carries no schema at all.
+// WHY:  This is the value schema-compatibility is judged on, so it must describe the
+//       WHOLE database rather than one table of it.
 function readSchema(dbPath: string): SchemaObject[] | null {
   let db: InstanceType<typeof Database> | null = null;
   try {
@@ -376,6 +388,14 @@ function probeExclusiveAccess(): { articles: number } {
   }
 }
 
+// WHAT: The one and only stdout write.
+// WHY:  The pipeline contract is exactly ONE final JSON line on stdout. Routing every
+//       exit path — success, refusal, partial failure — through a single function is
+//       what makes that checkable rather than aspirational.
+function emitSummary(summary: Record<string, unknown>): void {
+  console.log(JSON.stringify(summary));
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -386,7 +406,12 @@ async function main(): Promise<void> {
 
   if (!existsSync(LIVE_DB)) {
     console.error(`Live database not found at ${LIVE_DB}`);
-    process.exit(1);
+    // WHY: emit before failing. A fatal path that exits without the summary leaves
+    //      MAESTER and any scheduler parsing stdout with nothing at all — the same
+    //      defect as the deletion loop's escaping throw, on a different branch.
+    emitSummary({ ok: false, error: "live_db_missing", dry_run: !flags.apply });
+    process.exitCode = 1;
+    return;
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
@@ -402,7 +427,7 @@ async function main(): Promise<void> {
     console.error("Taking verified checkpoint...");
     checkpoint = takeVerifiedCheckpoint(stamp);
     console.error(
-      `  ${checkpoint.path} — ${checkpoint.articles} articles, ${(checkpoint.bytes / 1024 / 1024).toFixed(1)} MB, verified\n`
+      `  ${checkpoint.path} — ${checkpoint.articles} articles, ${(checkpoint.bytes / BYTES_PER_MIB).toFixed(MIB_DECIMAL_PLACES)} MB, verified\n`
     );
   } else {
     const probe = probeExclusiveAccess();
@@ -415,7 +440,14 @@ async function main(): Promise<void> {
   if (!liveSchema) {
     if (checkpoint) rmSync(checkpoint.path, { force: true });
     console.error("Could not read the live schema — refusing to classify backups.");
-    process.exit(1);
+    emitSummary({
+      ok: false,
+      error: "live_schema_unreadable",
+      dry_run: !flags.apply,
+      checkpoint: null,
+    });
+    process.exitCode = 1;
+    return;
   }
 
   const entries = listBackups();
@@ -436,7 +468,7 @@ async function main(): Promise<void> {
 
   const bytesToFree = prune.reduce((sum, p) => sum + p.bytes, 0);
   console.error(
-    `\n  ${keep.length} kept, ${prune.length} to prune (${(bytesToFree / 1024 / 1024).toFixed(1)} MB)\n`
+    `\n  ${keep.length} kept, ${prune.length} to prune (${(bytesToFree / BYTES_PER_MIB).toFixed(MIB_DECIMAL_PLACES)} MB)\n`
   );
 
   let deleted = 0;
@@ -477,8 +509,8 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(
-    JSON.stringify({
+  emitSummary({
+      ok: true,
       dry_run: !flags.apply,
       keep_days: flags.keepDays,
       checkpoint: checkpoint?.path ?? null,
@@ -497,12 +529,11 @@ async function main(): Promise<void> {
         acc[p.reason] = (acc[p.reason] ?? 0) + 1;
         return acc;
       }, {}),
-    })
-  );
+  });
 
   console.error(
     flags.apply
-      ? `\n=== Done: ${deleted} deleted${skipped > 0 ? `, ${skipped} already gone` : ""}${failed > 0 ? `, ${failed} FAILED` : ""}, ${(bytesFreed / 1024 / 1024).toFixed(1)} MB freed ===`
+      ? `\n=== Done: ${deleted} deleted${skipped > 0 ? `, ${skipped} already gone` : ""}${failed > 0 ? `, ${failed} FAILED` : ""}, ${(bytesFreed / BYTES_PER_MIB).toFixed(MIB_DECIMAL_PLACES)} MB freed ===`
       : `\n=== Dry run: ${prune.length} would be deleted. Re-run with --apply ===`
   );
 
@@ -525,7 +556,9 @@ const isEntryPoint =
 
 if (isEntryPoint) {
   main()
-    .then(() => process.exit(0))
+    // WHY: honour an exitCode main() set on a fatal path — a bare exit(0) here would
+    //      override it and report success after refusing to run.
+    .then(() => process.exit(process.exitCode ?? 0))
     .catch((err) => {
       console.error("prune-backups failed:", err instanceof Error ? err.message : err);
       process.exit(1);
