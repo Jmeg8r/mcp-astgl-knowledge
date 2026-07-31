@@ -242,6 +242,28 @@ and don't force a URL that's already in flight.**
 that posts to Telegram, Discord, or Substack is outward-facing — one deliberate run,
 never a retry loop.**
 
+**13. The Patched Instance.** A review names a defect, you fix exactly that line, and
+you push. The same defect is sitting three functions away in a form nobody has looked
+at yet, so the next round finds it, and the round after that finds the third. Each fix
+is correct; the sequence is the failure.
+→ **Rule: after the FIRST instance of a defect class, grep for the rest before pushing.
+Name the class out loud ("an exit path that skips the summary", "a check that prints
+instead of aborting", "a comparison that treats empty as equal"), then search for every
+member of it.**
+
+This repo already applies the reflex to schema — Mistake #8 is `grep -rn "<table_name>"
+src/` before changing a table. Extend it to control flow, which is where it was missed:
+PR #41 took three review rounds on one class (something bypassing the single-JSON-summary
+contract). Round 1 fixed an escaping throw in the deletion loop; round 2 found two
+sibling `process.exit(1)` calls doing the same thing four lines apart; round 3 found the
+entry-point `.catch()` emitting nothing at all — the path most likely to be hit in
+practice. One sweep after round 1 would have closed all three.
+
+The tell that you are patching instances rather than sweeping a class: **your fixes are
+mitigations rather than closures.** If each round narrows a window instead of shutting
+it, the artifact is wrong, not the implementation — that is how the bash pruning recipe
+became `src/prune-backups.ts` (see *Backup retention*).
+
 ## Quality bar — checkable, per deliverable
 
 **Any code change (baseline):**
@@ -249,6 +271,7 @@ never a retry loop.**
 - [ ] New/changed functions carry `WHAT:`/`WHY:` comments; constants named, no magic numbers.
 - [ ] Every new `fetch` has a timeout; every multi-table write is in a transaction.
 - [ ] stdout/stderr contract intact (grep your diff for `console.log` outside the summary line).
+- [ ] Fixing a review finding? The defect class was swept, not just the named instance (Mistake #13).
 - [ ] Verified against the runtime that production uses (dist for server/launchd paths), and the verification is stated in the PR, not implied.
 
 **Pipeline script (new or changed):**
