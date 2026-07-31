@@ -106,11 +106,43 @@ Established in the codebase (match them; do not "improve" them):
   (tags, pub_date, source_origin) so a sparse re-ingest never wipes richer data.
 - **Destructive scripts** support `--dry-run` and take a timestamped
   `data/knowledge.db.bak.<reason>-<ISO>` backup before deleting (see reconcile-drafts).
+  Nothing ever prunes these — see *Backup retention* below.
 - **Timeouts**: every outbound `fetch` gets `AbortSignal.timeout(...)` — 10–30s for
   embeds/API calls, minutes-scale only for local LLM generation (15 min Ollama draft,
   5 min Claude polish). Some older ingest scripts lack timeouts; new code must not.
 - **Retry** only where transient failure is expected AND retry is safe (embeds,
   5xx/429 on external APIs). Never retry a non-idempotent write.
+
+### Backup retention (added 2026-07-31)
+
+Every destructive script snapshots `data/knowledge.db` (~80 MB each) and **nothing ever
+deletes one**. That is deliberate — they are the last-resort restore point for exactly the
+mistakes this manual exists to prevent — but it grew to 8 files and 323 MB before anyone
+looked.
+
+**Use `npm run prune-backups`** (dry run by default; `--apply` to delete). It takes a
+verified checkpoint first, then removes only backups that fail the rule below. Deleting
+backups is **stop-and-ask** — show James the dry-run output and get approval before
+`--apply`.
+
+The policy it enforces: a backup is an eligible restore point only if it satisfies
+**both** conditions, not either —
+
+1. it is the fresh checkpoint, **or** younger than `--keep-days` (default 30); **and**
+2. its `articles` schema matches the live database.
+
+**Schema age is the real expiry, not calendar age.** A backup taken 10 days ago but before
+a migration 5 days ago passes the age test and is still useless — restoring it rolls the
+schema back. The 8 files pruned on 2026-07-31 were all pre-`public` column: any restore
+would have lost the entire publication gate plus two weeks of content. A backup older than
+your last schema migration is a rollback wearing a backup's filename.
+
+→ **Rule: do not re-implement this by hand.** The bash recipe this replaced took eleven
+review findings across four rounds, three of which shell could not fix at all — `lsof`
+observes writers rather than excluding them, delimiter-joined schema signatures collide,
+and a failed shell query returns `""` which compares equal to another `""`. The script
+holds `BEGIN EXCLUSIVE` across the copy, compares schemas structurally, and treats an
+unreadable backup as never-matching. See `src/prune-backups.ts` and its tests.
 
 Additional rules (not yet uniform in the codebase, but required for new code):
 
@@ -293,7 +325,18 @@ from the actual data before designing anything — this is the standing lesson i
 - `ASTGL_DRAFTS_DIR` defaults diverge: ingest/reconcile → `/Volumes/Research/ASTGL
   Articles/Drafts`; rewrite-queue/.env.example → `~/Projects/astgl-articles/substack`.
   Set the env var explicitly; never rely on the default.
-- `data/*.bak.*` backups accumulate unbounded (~200 MB and growing).
+- ~~`data/*.bak.*` backups accumulate unbounded (~200 MB and growing)~~ — pruned
+  2026-07-31 (8 stale files, 323 MB; `data/` 485 MB → 162 MB). A retention rule now
+  exists (see *Backup retention* below), but nothing enforces it automatically — the
+  directory will grow again and needs a periodic manual pass.
+- ~~A 0-byte `knowledge.db` sits at the repo root, untracked and un-gitignored~~ —
+  deleted 2026-07-31 and the class is now blocked by a root-anchored `/*.db` rule.
+  Investigated: **no code defect exists.** Every DB path in `src/` uses
+  `import.meta.dirname`, there is no `process.cwd()` in `src/`, no bare-path example
+  in any skill or doc, no launchd log entry at its timestamp, and no other ASTGL repo
+  is affected. It was an interactive command run from the repo root instead of
+  `data/`. ADR-0001's "something opened a database at `process.cwd()`" reads as a code
+  bug; it is not one.
 - Asana was retired entirely (2026-07-07): the PAT and `mcp__claude_ai_Asana__*`
   allow rules were removed from `.claude/settings.local.json`; the Teams-to-Asana
   bridge no longer exists. Don't suggest Asana integrations here.

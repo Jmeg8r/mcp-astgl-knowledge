@@ -128,10 +128,41 @@ git-tracked, and a checkpoint changes the file git sees.
 
 ## Recipe: Backup pruning (ask-first — this deletes files)
 
-`data/*.bak.*` grows unbounded (reconciler snapshots ~50 MB each). List with sizes and
-dates, propose keeping the newest of each kind plus anything younger than 30 days, and
-delete only what James approves, by name. These are the LAST-RESORT restore points
-for every mistake this skill exists to prevent — when in doubt, keep.
+`data/*.bak.*` grows unbounded (~80 MB per snapshot, nothing ever deletes one; `data/`
+reached 485 MB before anyone looked). These are the LAST-RESORT restore points for every
+mistake this skill exists to prevent — when in doubt, keep.
+
+**Use the script, not hand-run SQL:**
+
+```bash
+npm run prune-backups                    # DRY RUN (default) — reports, deletes nothing
+npm run prune-backups -- --apply         # actually delete
+npm run prune-backups -- --keep-days 60  # widen the age window
+```
+
+It takes a verified checkpoint first, then deletes only backups that fail the retention
+rule. Show James the dry-run output and get approval before `--apply` — deleting backups
+is stop-and-ask.
+
+**Retention rule:** keep the fresh checkpoint, plus any backup that is **both** within
+`--keep-days` **and** schema-compatible with the live database. Age alone is not enough:
+a backup taken 10 days ago but before a migration 5 days ago restores a schema the code
+no longer expects. The 8 files pruned on 2026-07-31 all predated the `public` column, so
+any restore would have silently dropped the publication gate's fail-closed default.
+
+**Why a script and not a bash recipe here.** The recipe this replaces took eleven review
+findings across four rounds, and three of them could not be fixed in shell at all:
+
+- `lsof` only *observes* — it cannot stop a scheduled job opening the database a moment
+  later, and a commit landing in the WAL leaves the main file byte-identical, so a hash
+  check passes over a backup missing that commit. The script copies inside
+  `BEGIN EXCLUSIVE`, so SQLite blocks other writers outright.
+- A delimiter-joined schema signature collides (`("a:b" TEXT)` vs `(a "b:TEXT")`). The
+  script compares structured values, where the collision cannot be expressed.
+- A failed shell query returns `""`, and `"" = ""` compares equal, so every backup read
+  as compatible. The script yields `null`, which is never equal to anything.
+
+See `src/prune-backups.ts` and its tests.
 
 ## Recipe: Restore from backup (disaster path — ask first, always)
 

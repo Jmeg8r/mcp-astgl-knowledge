@@ -222,6 +222,25 @@ that does not cross the boundary it is meant to police reports motion, not diver
   created 2026-07-28. Something opened a database at `process.cwd()`, which the path
   convention in CLAUDE.md forbids. Worth finding before it gets committed.
 
+  > [!NOTE]
+  > **Both resolved 2026-07-31, and the second one was misdiagnosed here.** `data/` was
+  > pruned 485 MB → 162 MB (8 stale backups, all predating the `public` column, replaced
+  > by one verified checkpoint) and a retention rule now lives in CLAUDE.md.
+  >
+  > The stray root database was **not** a code defect. Investigated: every DB path in
+  > `src/` resolves via `import.meta.dirname` (including the two create-on-open ones,
+  > `query-log.ts` and `rate-limit.ts`), there is no `process.cwd()` anywhere in `src/`,
+  > no bare-path example exists in any skill or doc, **no launchd log has an entry at its
+  > timestamp**, and no other ASTGL repo has an equivalent file. It was 0 bytes with no
+  > SQLite header — the residue of an interactive command run from the repo root instead
+  > of `data/`.
+  >
+  > Naming `process.cwd()` implied a bug in the code and sent the fix in the wrong
+  > direction. The real exposure was that the file was **committable**: `.gitignore`
+  > covered `data/*.bak*` and specific `data/*.db` files but nothing at the root. Closed
+  > with a root-anchored `/*.db` rule (deliberately not unanchored — `*.db` would also
+  > match the tracked `data/knowledge.db`).
+
 ## Alternatives considered
 
 **Query qmd's index from the MCP server.** Rejected — see all four blockers above. The
