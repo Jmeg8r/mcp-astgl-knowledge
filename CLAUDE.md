@@ -571,12 +571,24 @@ downloads it, extracts `build/knowledge-public.db`, and counts rows. It runs as 
   release. `--skip-tarball` reports from cache without fetching.
 - Only a **positive** delta alerts. A negative one is the normal state of a fresh clone,
   where `data/knowledge.db` is the older git-tracked copy.
-- **A content withdrawal therefore never alerts** (found 2026-08-01, first republish after
-  a pull). Removing something makes the delta negative — indistinguishable from the
-  fresh-clone state — so "the published package still carries what we withdrew" is silent
-  by design. Republishing after a withdrawal is a manual act tracked wherever the removal
-  was decided, and every publish ends with `npm run publish-drift` confirming the delta
-  returned to zero.
+- **A content withdrawal may not alert** (found 2026-08-01, first republish after a pull).
+  An isolated withdrawal makes the delta negative — indistinguishable from the fresh-clone
+  state — so "the published package still carries what we withdrew" is silent by design.
+  Republishing after a withdrawal is a manual act, tracked wherever the removal was decided.
+- **And a zero delta is not proof the withdrawn page is gone.** `publish_gap` compares
+  *counts*, not identities: publish one new article in the same release as one withdrawal
+  and the delta reads zero while the withheld page still ships. Counting is not checking.
+  So after any publish that withdraws content, assert the row's **absence** in the
+  published tarball directly, not via the aggregate:
+
+  ```bash
+  npm pack mcp-astgl-knowledge@"$(npm view mcp-astgl-knowledge version)" --pack-destination /tmp >/dev/null \
+    && tar -xzOf /tmp/mcp-astgl-knowledge-*.tgz package/build/knowledge-public.db > /tmp/pub.db \
+    && sqlite3 -readonly /tmp/pub.db "SELECT COUNT(*) FROM articles WHERE title = '<withdrawn title>';"
+  ```
+
+  `0` is the pass. `npm run publish-drift` remains the aggregate check and answers a
+  different question — whether the corpus as a whole drifted — so run both.
 
 → **Rule: `getSnapshot`/`upsertSnapshot` and the `ecosystem_snapshots` DDL now live ONLY in
 `knowledge-db.ts`.** `freshness.ts` used to carry a second copy of all three; do not
