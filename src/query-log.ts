@@ -46,6 +46,17 @@ export function initQueryLog(): InstanceType<typeof Database> {
 
   logDb = new Database(LOG_DB_PATH);
 
+  // WHAT: Pin WAL journal mode on every open.
+  // WHY:  Maester's morning analytics jobs read this file while the server's
+  //       buffered flushes write it; WAL lets readers overlap the writer instead
+  //       of surfacing SQLITE_BUSY. The mode persists inside the database file —
+  //       the production file has been WAL since long before this line — but no
+  //       code ever established it, so a fresh database (new clone, or a test
+  //       pointed at ASTGL_QUERY_LOG_DB) came up in rollback mode and diverged
+  //       from the contract CLAUDE.md documents (-wal/-shm sidecars are normal).
+  //       Decided 2026-08-01. Idempotent on an already-WAL file.
+  logDb.pragma("journal_mode = WAL");
+
   logDb.exec(`
     CREATE TABLE IF NOT EXISTS query_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -96,6 +96,12 @@ export function initRateLimitDb(): void {
   // WHY: Query counts are already there — just need a registrations table
   rateLimitDb = new Database(RATE_DB_PATH);
 
+  // WHAT: Pin WAL here too — this module can be the one that creates the file.
+  // WHY:  initRateLimitDb() and initQueryLog() open the same database and either
+  //       can run first against a path where it does not exist yet. Full
+  //       rationale in query-log.ts's initQueryLog().
+  rateLimitDb.pragma("journal_mode = WAL");
+
   // Ensure query_log table exists (may not if server hasn't been used yet)
   rateLimitDb.exec(`
     CREATE TABLE IF NOT EXISTS query_log (
