@@ -261,8 +261,15 @@ exists and only falls back to the pruned artifact otherwise, so **a fresh clone 
 stale 144-article database** — the MCP server and every tool will serve 2026-07-13 content
 until the pipelines repopulate it. On a working machine the file has long since been
 overwritten by the incremental pipelines, which is why this is invisible day to day.
-A fresh clone that needs real data must run the ingest/sync pipelines (or copy a database
-in) before local results mean anything; it must not solve that by committing the result.
+A fresh clone that needs real data should populate it through the **incremental** paths —
+`npm run sync-wiki`, `ingest-drafts`, `ingest-projects`, `structure` — or by copying a
+database in. **Not `npm run ingest`:** that is the destructive rebuild of Mistake #2, and
+because `resolveKnowledgeDbPath()` selects `data/knowledge.db` whenever it exists, running
+it here targets the tracked file and drops whatever the incremental pipelines have already
+built. If `ingest` genuinely is the right tool, Mistake #2's preconditions apply in full —
+fresh timestamped backup, James's explicit approval in-session, and a stated plan to re-run
+every incremental pipeline afterwards. Either way, do not solve a stale clone by committing
+the result.
 
 Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
 release act (it ships in the npm package)". That stopped being true on 2026-07-29 and
@@ -501,8 +508,9 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
 
 → **Rule: the gate covers npm, NOT git.** This repo is public, and `data/knowledge.db` is
-tracked at a stale 144-article revision. Committing the current 475-article file would put
-297 withheld rows into public history with no gate in the way — see Mistake #10. ADR-0001
+tracked at a stale 144-article revision. Committing the working file would put its withheld
+rows into public history with no gate in the way — 297 of 475 as measured 2026-07-31, and
+growing daily; see Mistake #10 for the dated breakdown. ADR-0001
 reasoned about the tarball and never addressed this second channel; the only thing holding
 it closed is that nobody stages the file.
 
