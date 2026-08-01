@@ -571,6 +571,12 @@ downloads it, extracts `build/knowledge-public.db`, and counts rows. It runs as 
   release. `--skip-tarball` reports from cache without fetching.
 - Only a **positive** delta alerts. A negative one is the normal state of a fresh clone,
   where `data/knowledge.db` is the older git-tracked copy.
+- **A content withdrawal therefore never alerts** (found 2026-08-01, first republish after
+  a pull). Removing something makes the delta negative — indistinguishable from the
+  fresh-clone state — so "the published package still carries what we withdrew" is silent
+  by design. Republishing after a withdrawal is a manual act tracked wherever the removal
+  was decided, and every publish ends with `npm run publish-drift` confirming the delta
+  returned to zero.
 
 → **Rule: `getSnapshot`/`upsertSnapshot` and the `ecosystem_snapshots` DDL now live ONLY in
 `knowledge-db.ts`.** `freshness.ts` used to carry a second copy of all three; do not
