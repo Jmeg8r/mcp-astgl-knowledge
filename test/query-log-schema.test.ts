@@ -220,6 +220,15 @@ test("a query_log with no content_cited column is refused, not rebuilt", () => {
       "should refuse by name, not throw a bare SQLite 'no such column'"
     );
 
+    // WHY: This throws at server start, unattended. An operator reading the log
+    //      needs to know WHICH database — the path is resolved through db-path.ts
+    //      and an override, so "the query log" is not enough to act on.
+    assert.throws(
+      () => ensureQueryLogSchema(db),
+      new RegExp(db.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      "the error should name the database file it refused"
+    );
+
     // The refusal must leave the database exactly as it found it.
     assert.equal(
       (db.prepare("SELECT COUNT(*) AS n FROM query_log").get() as { n: number }).n,

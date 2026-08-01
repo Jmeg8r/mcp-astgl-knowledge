@@ -118,7 +118,7 @@ export function ensureQueryLogSchema(db: Db): void {
       "query_log exists without a content_cited column — this is not a schema " +
         "version this system has ever written. Refusing to rebuild it, because " +
         "doing so would fabricate the citation history. Inspect the database at " +
-        "the resolved query-log path before continuing."
+        `${db.name} before continuing.`
     );
   }
 
