@@ -15,6 +15,7 @@ import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
 import { resolveQueryLogDbPath } from "./db-path.js";
+import { ensureQueryLogSchema } from "./query-log-schema.js";
 import type { QueryLogEntry } from "./types.js";
 
 // WHY: Resolved via db-path.ts, which is also what rate-limit.ts and the four
@@ -57,27 +58,9 @@ export function initQueryLog(): InstanceType<typeof Database> {
   //       Decided 2026-08-01. Idempotent on an already-WAL file.
   logDb.pragma("journal_mode = WAL");
 
-  logDb.exec(`
-    CREATE TABLE IF NOT EXISTS query_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT NOT NULL,
-      client_id TEXT NOT NULL,
-      tool_name TEXT NOT NULL,
-      query_params TEXT NOT NULL,
-      content_cited TEXT,
-      response_time_ms INTEGER NOT NULL,
-      confidence_score REAL
-    )
-  `);
-
-  // WHAT: Index on timestamp + tool_name for common analytics queries
-  // WHY: Most reports filter by date range and/or tool
-  logDb.exec(
-    "CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(timestamp)"
-  );
-  logDb.exec(
-    "CREATE INDEX IF NOT EXISTS idx_query_log_tool ON query_log(tool_name)"
-  );
+  // WHY: The DDL lives in query-log-schema.ts because rate-limit.ts opens this
+  //      same file and carried its own copy of it (Mistake #8).
+  ensureQueryLogSchema(logDb);
 
   // WHAT: Start periodic flush timer
   // WHY: Ensures buffered entries are written even during low-traffic periods
