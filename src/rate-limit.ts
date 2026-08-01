@@ -14,9 +14,10 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { randomUUID, createHash } from "crypto";
 import Database from "better-sqlite3";
+import { resolveQueryLogDbPath } from "./db-path.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
-const RATE_DB_PATH = join(DATA_DIR, "query-log.db");
+const RATE_DB_PATH = resolveQueryLogDbPath();
 const CLIENT_ID_FILE = join(homedir(), ".astgl-client-id");
 
 const PUBLIC_LIMIT = 50;
