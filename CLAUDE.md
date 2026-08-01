@@ -468,11 +468,15 @@ from the actual data before designing anything — this is the standing lesson i
   The version must already be **published**, since each leg sources `dist/` and the
   pruned database out of the npm tarball via `--from-npm`; reading it from the registry
   rather than hardcoding one keeps the command correct after the next release.
-  Last verified **2026-07-31 against `main@4331dd55`, bundling published npm 1.3.0**
-  ([run 30667252610](https://github.com/Jmeg8r/mcp-astgl-knowledge/actions/runs/30667252610)):
-  all four platforms green, gate verified at 178 articles / 0 withheld / 0 drafts,
-  confirming #36's win32 fix holds on main and not merely on its branch — which the
-  branch-only run never established. Record the SHA, the run id AND the npm version when you
+  Last verified **2026-08-01 against `main@3a19f645`, bundling published npm 1.3.1**
+  ([run 30710537536](https://github.com/Jmeg8r/mcp-astgl-knowledge/actions/runs/30710537536)):
+  all four platforms green, gate verified at **177 articles / 0 withheld / 0 drafts** — the
+  first run to carry the post-withdrawal corpus, and the count CI reports here is the
+  independent confirmation that the bundle can never carry content the npm package does not.
+  (Previously 2026-07-31, `main@4331dd55`, npm 1.3.0,
+  [run 30667252610](https://github.com/Jmeg8r/mcp-astgl-knowledge/actions/runs/30667252610),
+  178 articles — which established that #36's win32 fix holds on main and not merely on its
+  branch.) Record the SHA, the run id AND the npm version when you
   re-verify: the command above resolves the version at dispatch time, so `npm view` will
   return something else after the next release and the record would no longer identify
   which tarball was actually bundled. A bare date is not checkable once main advances,
