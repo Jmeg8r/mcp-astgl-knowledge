@@ -10,14 +10,14 @@ All 116 tagged entities are bucketed below; every one appears exactly once, veri
 > **`src/public-allowlist.ts` is authoritative.** This document records *why* each entity
 > was bucketed; the code decides what actually ships. If the two disagree, the code wins and
 > this file is the thing that is wrong. Keep the Ship section and `ENTITY_ALLOWLIST` in sync
-> — 32 entries in both.
+> — 31 entries in both as of 2026-07-31 (32 as originally approved; `OpenClaw` removed).
 
 Anything not in **Ship** stays `public = 0`, which is also the fail-closed default: an
 entity accidentally omitted from this file does not ship.
 
 ---
 
-## Ship (32)
+## Ship (31 as of 2026-07-31; 32 as approved)
 
 **Local-AI hardware substrate (4)**
 `Mac Studio` · `Mac Studio M3 Ultra` · `M3 Ultra` · `Apple Silicon`
@@ -33,27 +33,33 @@ entity accidentally omitted from this file does not ship.
 **Automation & MCP substrate (3)**
 `launchd` · `mcpaudit` · `mcp-astgl-knowledge`
 
-**Own agent stack (9)** — approved 2026-07-29. Shipping these builds authority and doubles
+**Own agent stack (8 as of 2026-07-31; 9 as approved)** — approved 2026-07-29. Shipping these builds authority and doubles
 as discovery for projects covered in the newsletter. See the OpenClaw note below.
 `ClaudeClaw` · `ClaudeClaw Mission Control` · `SecureClaw` · `ClawHub` · `ClawPad` ·
-`ClawHavoc` · `OpenClaw` · `Paperclip` · `LAMM — Local Agent Memory Manager`
+`ClawHavoc` · `Paperclip` · `LAMM — Local Agent Memory Manager`  
+(`OpenClaw` was in this group and was **removed 2026-07-31** — see the note below.)
 
 **Methodology (2)** — approved 2026-07-29.
 `Ironclad Workflow` · `Technical Reality Check`
 
-### Note — the OpenClaw page's "retired" framing is stale
+### Note — the OpenClaw page's "retired" framing is stale (and why it is now withheld)
 
-The page states OpenClaw was *"archived with 30-day deletion timer"* in late April 2026.
-Checked 2026-07-29: **`~/.openclaw/` is still present on disk**, and ClaudeClaw's live code
-still references paths beneath it (`src/session-files.ts`, `src/pipeline/skills/vercel-publish.ts`).
-The ClawPad WebSocket port the page names (18789) returns no hits in ClaudeClaw, so that
-detail is genuinely dead.
+The page presents itself as describing something archived in April 2026. Checked
+2026-07-29: that framing does not hold — enough of what the page documents is still in use
+that its content should be read as current rather than historical. The specifics are
+deliberately not restated here; this file is public, and enumerating why a withheld page is
+sensitive re-discloses what withholding it prevents.
 
 Consequence: the page publishes the directory layout of something that still exists rather
 than something deleted. It names no credentials — the pre-hardening posture is explicitly
 paired with the SecureClaw remediation that followed — so this is a disclosure-hygiene
-question, not an exposure. Shipping as approved. To pull it later, delete one line from the
-Own agent stack bucket; the fail-closed default handles the rest.
+question, not an exposure.
+
+**Pulled 2026-07-31.** It was shipped as approved on the "retired case study" reading; once
+that framing was confirmed stale — the page documents the layout of something that still
+exists — James decided to withhold it. Removed from `ENTITY_ALLOWLIST`; the fail-closed
+default handles the rest. Note this does **not** retract npm 1.3.0, which already contains
+the page and cannot be altered; the change takes effect on the next publish.
 
 ---
 
@@ -85,8 +91,9 @@ vendor rather than carrying ASTGL-specific insight.
 
 ## Exclude — private projects & personal ventures (17)
 
-`Income Investor` states that monetization is gated on a Florida securities-attorney review,
-disclosing both business-legal status and state of residence.
+`Income Investor` carries unlaunched-product and business-status detail. (Redacted
+2026-07-31: this line previously spelled out what it discloses, which defeated the purpose
+in a public repository — see the note in ADR-0001's *Scope of what ships*.)
 
 `Income Investor` · `Dividend Portfolio Tracker` · `Social Media Scheduling App` ·
 `Geekspace` · `Geekspace MCP` · `revri` · `quorum` · `trevin-creator` · `Tars` ·
@@ -111,8 +118,8 @@ workspace.
 
 | | Entities | Concepts | Total |
 |---|---|---|---|
-| **Published** | **32** | **68** | **100** |
-| Withheld | 84 | 6 | 90 |
+| **Published** | **31** | **68** | **99** |
+| Withheld | 85 | 6 | 91 |
 | Currently indexed | 116 | 74 | 190 |
 
 The 68 published concepts are the 74 tagged concept pages less six internal-jargon pages

@@ -3,9 +3,12 @@
  *
  * WHAT: The single source of truth for which rows in knowledge.db are eligible
  *       for the published npm artifact.
- * WHY:  `data/knowledge.db` ships inside the package (package.json `files`), so
- *       anything in it is public the moment a release is cut. The DB also holds
- *       201 unpublished article drafts and 90 private-project wiki pages. The
+ * WHY:  the pruned `build/knowledge-public.db` ships in the package, and this list
+ *       decides what survives the prune — so anything named here is public the moment
+ *       a release is cut. (`data/knowledge.db` itself was shipped until 2026-07-29;
+ *       ADR-0001 replaced it with the pruned artifact. It is still tracked in git,
+ *       which is a second public channel the gate does NOT cover — never commit it.)
+ *       The DB also holds unpublished article drafts and private-project wiki pages. The
  *       `astgl` vault tag cannot serve as the gate — inside the vault it means
  *       "relates to my subject area" (which is why `Vite` and `Income Investor`
  *       both carry it), not "I chose to publish this". See
@@ -25,7 +28,7 @@
  * time was a weaker control than simply naming what ships.
  *
  * Adding a title here IS the publication decision. After editing, run
- * `npm run reclassify-wiki` — or just publish, since `prepublishOnly` runs it.
+ * `npm run reclassify-wiki` — or just publish, since `prepack` runs it.
  */
 
 // WHAT: astgl-site content types that represent published newsletter output.
@@ -51,7 +54,7 @@ export const PUBLISHED_SITE_TYPES = new Set([
 //       whole module fail closed: new writing is withheld until it is named
 //       here, which is a deliberate act rather than an omission.
 //       Adding an entry is the publication decision. After editing, run
-//       `npm run reclassify-wiki` (or just publish — prepublishOnly runs it).
+//       `npm run reclassify-wiki` (or just publish — prepack runs it).
 export const CONCEPT_ALLOWLIST = new Set([
   "A Keyframe Stores the End State, Not the Motion",
   "AI-Assisted Single-Session Application Development",
@@ -123,7 +126,8 @@ export const CONCEPT_ALLOWLIST = new Set([
   "Version Mismatch Gotcha",
 ]);
 
-// WHAT: The 32 wiki entities approved for publication (docs/entity-allowlist.md).
+// WHAT: The wiki entities approved for publication (docs/entity-allowlist.md).
+//       31 as of 2026-07-31; the count is not restated per-edit so it cannot drift.
 // WHY:  Entities are withheld by default — the bucket holds generic tool stubs
 //       an LLM answers better, private ventures, and pipeline internals. Only
 //       entries where ASTGL carries genuine authority are listed.
@@ -160,7 +164,11 @@ export const ENTITY_ALLOWLIST = new Set([
   "ClawHub",
   "ClawPad",
   "ClawHavoc",
-  "OpenClaw",
+  // WHY no "OpenClaw": allowlisted 2026-07-29 with the rest of the agent stack,
+  //      removed 2026-07-31 by the repo owner's decision after the justification for
+  //      including it was found not to hold. Rationale is deliberately not restated
+  //      here — this file is public. Re-adding it means re-deciding, not restoring an
+  //      oversight. See ADR-0001, *Scope of what ships*.
   "Paperclip",
   "LAMM — Local Agent Memory Manager",
   // Methodology

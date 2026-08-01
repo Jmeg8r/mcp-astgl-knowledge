@@ -86,17 +86,47 @@ content, zero private IPs, no email addresses. The eight `sk-`/`ghp_`/`AKIA` pat
 are all false positives — slugs such as `task-group-cancellation`, plus one page that
 *describes* secret-detection regexes as teaching material.
 
-Four items would nonetheless go public that should not:
+Four items surfaced in the audit as carrying detail that should be disclosed by choice
+rather than published by tag. **Three were excluded; the fourth was deliberately kept:**
 
-| Page | Exposure |
-|---|---|
-| `Income Investor` | Unlaunched product, its stack, and that monetization is "gated on a Florida securities-attorney review" — business-legal status and state of residence |
-| `astgl-gtm` | Existence and local path of a private go-to-market workspace |
-| `OpenClaw` | James's own pre-hardening security posture (plaintext credentials in `.bak` files, `bypassPermissions` on the main agent, auto-loaded plugins) |
-| `Autonomous Commerce Agent (ACA)` | `/Users/jamescruce/…` — macOS username embedded in a shipped artifact |
+| Page | Exposure category | Outcome |
+|---|---|---|
+| `Income Investor` | Unlaunched-product and business-status detail | withheld (`public = 0`) |
+| `astgl-gtm` | Private workspace detail | withheld (`public = 0`) |
+| `Autonomous Commerce Agent (ACA)` | Local-environment identifiers | withheld (`public = 0`) |
+| `OpenClaw` | Security-posture detail | withheld (removed from allowlist 2026-07-31) |
 
-None is catastrophic; OpenClaw is retired and reads as a before/after case study. But these
-are facts that should be *disclosed by choice*, not published by tag.
+> [!NOTE]
+> **Redacted 2026-07-31.** This table originally spelled out *what* each page exposes. That
+> was self-defeating: this repository is public, so a document arguing these four pages must
+> not be published was itself publishing their contents in summary. The categories above are
+> the level of detail this file should carry — enough to justify the decision, not enough to
+> reproduce the disclosure. Found when the same descriptions were about to be copied into
+> CLAUDE.md (PR #45) and review caught it there.
+>
+> **This redaction is forward-looking only.** The original wording is in git history from
+> 2026-07-29 and remains readable there; removing it would require rewriting the history of
+> a public repository, which is a separate and much larger decision. Treat the underlying
+> facts as already disclosed and decide on that basis.
+
+`OpenClaw` **was** allowlisted on 2026-07-29 as part of the approved own-agent-stack
+group, on the rationale that shipping those pages builds authority and doubles as
+discovery. It shipped in npm 1.3.0.
+
+> [!IMPORTANT]
+> **Removed from the allowlist 2026-07-31**, by the repo owner's decision. The
+> justification recorded here — that the page describes something no longer in use — did
+> not hold when checked, so the "historical" reading it relied on does not apply. The
+> supporting detail is deliberately not restated: this file is public, and spelling out
+> why a withheld page is sensitive re-discloses what withholding it prevents.
+>
+> **This does not retract npm 1.3.0.** That version still contains the page and cannot be
+> altered — npm versions are immutable. The change takes effect on the next publish, when
+> `prepack` runs reclassify → prune. Until then the published package continues to serve
+> it.
+
+The other three are withheld. These are facts that should be *disclosed by choice*, not
+published by tag.
 
 **Usefulness audit — this is the binding constraint.** Of 190 pages, roughly 40 are generic
 tool stubs (Git, React, Next.js, Vite, Xcode, Swift, Sparkle, Homebrew, Blender, CapCut)
@@ -117,7 +147,8 @@ no standing in.
   `Mac Studio`, and `Apple Silicon` earn their place, `Vite` and `Income Investor` do not.
 
 Net, once the allowlist was actually drafted and approved: **100 pages** — 68 concepts (74
-less the 6 internal-jargon pages) plus 32 allowlisted entities — instead of 190 pages of
+less the 6 internal-jargon pages) plus 32 allowlisted entities (**31 from 2026-07-31**, when
+`OpenClaw` was removed, making the total **99**) — instead of 190 pages of
 mixed signal. See `docs/entity-allowlist.md` for the per-entity buckets.
 
 **Why a second gate is required.** The `astgl` tag is doing two incompatible jobs. Inside
@@ -133,6 +164,8 @@ closed. One field cannot be both.
 > `package.json` `files` ships `build/knowledge-public.db` rather than `data/knowledge.db`.
 > Measured result: **178 of 469 articles publish** — 78 published newsletter pieces, 68
 > concepts, 32 allowlisted entities; 291 withheld, of which **201 are unpublished drafts**
+> (all figures as of 2026-07-29; from 2026-07-31 the entity allowlist is 31 and one further
+> row is withheld)
 > (see the amendment below).
 
 **Where the gate sits: publish time, not ingest time (decided 2026-07-29).** MAESTER and

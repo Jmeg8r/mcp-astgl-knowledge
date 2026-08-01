@@ -169,9 +169,20 @@ It `DROP TABLE`s articles/chunks/vec_chunks and rebuilds **only** from astgl-sit
 markdown — silently destroying everything added by discovery, drafts, projects, and
 wiki sync (the DB grew 8 MB → 50 MB from those sources; ingest would torch it).
 → **Rule: never run `npm run ingest` (or any DROP) against `data/knowledge.db` without
-(a) a fresh timestamped backup, (b) explicit approval from James in this session, and
-(c) a stated plan to re-run every incremental pipeline afterward. Incremental fixes go
-through `knowledge-db.ts` upserts instead.**
+(a) a VERIFIED timestamped restore point, (b) explicit approval from James in this
+session, and (c) a stated plan to re-run every incremental pipeline afterward.
+Incremental fixes go through `knowledge-db.ts` upserts instead.**
+
+"Verified" is the standard `src/prune-backups.ts` implements — `PRAGMA integrity_check`
+returns `ok`, the copy's article count matches live, its content hash is byte-identical,
+and its **whole** `sqlite_master` schema matches (not `pragma_table_info('articles')`
+alone; a change to `chunks`, `vec_chunks`, `ideas`, `rewrite_jobs` or
+`ecosystem_snapshots` is invisible to a single-table check). A copy that has not passed
+those four is a restore point you have assumed, and the day you need it is the day the
+assumption was wrong. Eligibility is a conjunction, not a
+choice: **(newest checkpoint OR within `--keep-days`, default 30) AND all four checks
+above**, schema compatibility included. The newest checkpoint is not exempt — it is the
+most likely candidate, not an automatically valid one. See *Backup retention*.
 
 **3. The Cron Mirage.** Something runs at the wrong time, so you edit `cron/*.json`
 or add a crontab entry. Nothing changes (descriptors), or you've created a duplicate
@@ -223,10 +234,71 @@ placeholder line in `.env.example` and go into pass. `.env` values may be refere
 never displayed.**
 
 **10. The Blanket Commit.** You `git add -A` and sweep in `data/*.bak.*`, WAL sidecars,
-logs, or an unintended 50 MB `knowledge.db` change.
-→ **Rule: stage files by name. A `knowledge.db` commit is a deliberate release act
-(it ships in the npm package) — call it out in the commit message and PR body. If the
-diff shows `data/` changes you didn't intend, stop and ask.**
+logs, or an unintended 80 MB `knowledge.db` change.
+→ **Rule: stage files by name. If the diff shows `data/` changes you didn't intend, stop
+and ask.**
+
+→ **Rule: NEVER commit `data/knowledge.db`. This repository is PUBLIC, and the working
+copy holds hundreds of rows the publication gate exists to withhold.** Measured
+**2026-07-31** (later than ADR-0001's 469/471-article figures elsewhere in this file and
+in the ADR itself — the database grows daily, so any two counts written on different days
+will disagree and neither is wrong): 475 articles, of which **178 are `public = 1` and 297
+are withheld** — 206
+unpublished drafts in full searchable text, 85 non-allowlisted entities, 6
+internal-jargon concepts, as of that date — read every count here as a timestamp, not a
+constant. Three of the four pages ADR-0001 called out are among the withheld; **do not
+restate what makes them sensitive in this file.** CLAUDE.md is itself public, so
+describing the attributes of withheld rows re-discloses exactly what withholding them was
+meant to prevent. The categories above are the right level of detail here.
+
+(The fourth, `OpenClaw`, was allowlisted and shipped in npm 1.3.0, but was **removed from
+`src/public-allowlist.ts` on 2026-07-31** — ADR-0001's "it is retired" justification was
+stale on inspection. It is withheld from the next publish
+onward; 1.3.0 is immutable and still carries it. Noted so nobody re-reads the ADR's table as
+four uniformly-withheld pages, as this rule's first draft did.)
+
+**The gate guards npm, not git.** ADR-0001 reasoned carefully about the tarball —
+`package.json` `files` ships `build/knowledge-public.db`, and `prepack` runs the prune —
+and never addressed the second channel. Committing `data/knowledge.db` walks straight
+past all of it, into public history, permanently. The file is still *tracked* at an old
+144-article revision from 2026-07-13; **leave it stale.** That staleness is load-bearing
+rather than neglect — it is the only thing keeping the withheld rows out of public
+history.
+
+But it is NOT inert. `resolveKnowledgeDbPath()` returns `data/knowledge.db` whenever it
+exists and only falls back to the pruned artifact otherwise, so **a fresh clone reads the
+stale 144-article database** — the MCP server and every tool will serve 2026-07-13 content
+until the pipelines repopulate it. On a working machine the file has long since been
+overwritten by the incremental pipelines, which is why this is invisible day to day.
+A fresh clone that needs real data should populate it through the **incremental** paths,
+each a real npm script:
+
+```bash
+npm run sync-wiki        # SecondBrain wiki subset (needs /Volumes/Research mounted)
+npm run ingest-drafts    # unpublished drafts
+npm run ingest-projects  # project docs from astgl-site projects.json
+npm run structure        # discovered astgl.ai content (needs Ollama)
+```
+
+or by copying a populated database in:
+
+```bash
+cp /path/to/populated/knowledge.db data/knowledge.db
+```
+
+**Not `npm run ingest`:** that is the destructive rebuild of Mistake #2, and
+because `resolveKnowledgeDbPath()` selects `data/knowledge.db` whenever it exists, running
+it here targets the tracked file and drops whatever the incremental pipelines have already
+built. If `ingest` genuinely is the right tool, **Mistake #2's preconditions apply in full** —
+including its definition of a *verified* restore point, which is stated there and not
+repeated here so the two cannot drift. Either way, do not solve a stale clone by committing
+the result.
+
+Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
+release act (it ships in the npm package)". That stopped being true on 2026-07-29 and
+framed the risk as *release hygiene* rather than *disclosure* — which is the more
+dangerous half. If someone asks you to commit the database, surface these numbers and get
+an explicit decision; do not infer consent from "commit the changes".
 
 **11. The Forced Duplicate.** You re-queue a rewrite with
 `--article-url` "to be safe" — that flag bypasses the pending-approval/cooldown guard
@@ -449,14 +521,21 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 - **`npm run reclassify-wiki`** — re-derives `public` for already-indexed rows without
   re-embedding. Sync is mtime-incremental, so an unchanged page is never re-processed and an
   allowlist edit would otherwise change nothing. Available to run by hand, but you do not
-  have to remember to: it is wired into `prepublishOnly`.
-- **`prepublishOnly`** runs build → **reclassify** → prune, in that order, so a publish can
+  have to remember to: it is wired into `prepack`.
+- **`prepack`** runs build → **reclassify** → prune, in that order, so a publish can
   neither skip the gate nor ship flags that predate the current allowlist. Do not reorder or
   drop the reclassify step — without it, editing `public-allowlist.ts` and publishing would
   ship stale `public = 1` rows.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
+
+→ **Rule: the gate covers npm, NOT git.** This repo is public, and `data/knowledge.db` is
+tracked at a stale 144-article revision. Committing the working file would put its withheld
+rows into public history with no gate in the way — 297 of 475 as measured 2026-07-31, and
+growing daily; see Mistake #10 for the dated breakdown. ADR-0001
+reasoned about the tarball and never addressed this second channel; the only thing holding
+it closed is that nobody stages the file.
 
 ### The publish-gap instrument (added 2026-07-30, ADR-0001 amendment)
 
