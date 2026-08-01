@@ -160,7 +160,13 @@ export const ENTITY_ALLOWLIST = new Set([
   "ClawHub",
   "ClawPad",
   "ClawHavoc",
-  "OpenClaw",
+  // WHY no "OpenClaw": removed 2026-07-31. It was allowlisted with the rest of the
+  //      agent stack on 2026-07-29, justified in ADR-0001 as "retired and reads as a
+  //      before/after case study". `docs/entity-allowlist.md` records that framing as
+  //      stale on the same date — `~/.openclaw/` is still on disk and live ClaudeClaw
+  //      code still references paths beneath it — so the page's security-posture detail
+  //      is current, not historical. Withheld by James's decision.
+  //      Re-adding it means re-deciding that, not restoring an oversight.
   "Paperclip",
   "LAMM — Local Agent Memory Manager",
   // Methodology

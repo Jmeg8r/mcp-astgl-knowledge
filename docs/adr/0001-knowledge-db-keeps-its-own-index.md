@@ -94,7 +94,7 @@ rather than published by tag. **Three were excluded; the fourth was deliberately
 | `Income Investor` | Unlaunched-product and business-status detail | withheld (`public = 0`) |
 | `astgl-gtm` | Private workspace detail | withheld (`public = 0`) |
 | `Autonomous Commerce Agent (ACA)` | Local-environment identifiers | withheld (`public = 0`) |
-| `OpenClaw` | Security-posture detail | **ships** (`public = 1`) |
+| `OpenClaw` | Security-posture detail | withheld (removed from allowlist 2026-07-31) |
 
 > [!NOTE]
 > **Redacted 2026-07-31.** This table originally spelled out *what* each page exposes. That
@@ -109,19 +109,22 @@ rather than published by tag. **Three were excluded; the fourth was deliberately
 > a public repository, which is a separate and much larger decision. Treat the underlying
 > facts as already disclosed and decide on that basis.
 
-`OpenClaw` is named in `src/public-allowlist.ts` and verified present in published npm
-1.3.0. It ships as part of the approved **own agent stack** group (`docs/entity-allowlist.md`,
-approved 2026-07-29), on the rationale that shipping those pages builds authority and
-doubles as discovery for projects the newsletter covers.
+`OpenClaw` **was** allowlisted on 2026-07-29 as part of the approved own-agent-stack
+group, on the rationale that shipping those pages builds authority and doubles as
+discovery. It shipped in npm 1.3.0.
 
-> [!WARNING]
-> **The original justification for that decision was "OpenClaw is retired and reads as a
-> before/after case study." That reason is stale.** `docs/entity-allowlist.md` records, as
-> of 2026-07-29, that `~/.openclaw/` is still present on disk and that live ClaudeClaw code
-> still references paths beneath it. So the page ships on the agent-stack rationale, not
-> because the thing it describes is retired — and a reader should not infer that the
-> security-posture detail it carries is historical. Whether it should still ship on that
-> basis is a live decision, not one this ADR settled. Flagged 2026-07-31.
+> [!IMPORTANT]
+> **Removed from the allowlist 2026-07-31.** The justification recorded here — "OpenClaw
+> is retired and reads as a before/after case study" — was stale on the day it was
+> written: `docs/entity-allowlist.md` notes, dated 2026-07-29, that `~/.openclaw/` is
+> still present on disk and that live ClaudeClaw code still references paths beneath it.
+> The security-posture detail the page carries is therefore current rather than
+> historical, and James decided on 2026-07-31 to withhold it.
+>
+> **This does not retract npm 1.3.0.** That version still contains the page and cannot be
+> altered — npm versions are immutable. The change takes effect on the next publish, when
+> `prepack` runs reclassify → prune. Until then the published package continues to serve
+> it.
 
 The other three are withheld. These are facts that should be *disclosed by choice*, not
 published by tag.

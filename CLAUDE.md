@@ -249,13 +249,11 @@ restate what makes them sensitive in this file.** CLAUDE.md is itself public, so
 describing the attributes of withheld rows re-discloses exactly what withholding them was
 meant to prevent. The categories above are the right level of detail here.
 
-(The fourth, `OpenClaw`, is `public = 1` and **does ship** — named in
-`src/public-allowlist.ts` as part of the approved own-agent-stack group, and verified
-present in published npm 1.3.0. Not a gate failure; noted so nobody re-reads the ADR's
-table as four withheld pages, as this rule's first draft did. Do **not** repeat ADR-0001's
-original justification that OpenClaw "is retired" — `docs/entity-allowlist.md` records
-that framing as stale as of 2026-07-29, so whether it should still ship is a live question
-rather than a settled one. See the warning in ADR-0001's *Scope of what ships*.)
+(The fourth, `OpenClaw`, was allowlisted and shipped in npm 1.3.0, but was **removed from
+`src/public-allowlist.ts` on 2026-07-31** — ADR-0001's "it is retired" justification was
+stale, and the page documents something still on disk. It is withheld from the next publish
+onward; 1.3.0 is immutable and still carries it. Noted so nobody re-reads the ADR's table as
+four uniformly-withheld pages, as this rule's first draft did.)
 
 **The gate guards npm, not git.** ADR-0001 reasoned carefully about the tarball —
 `package.json` `files` ships `build/knowledge-public.db`, and `prepack` runs the prune —
