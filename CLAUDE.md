@@ -435,6 +435,18 @@ from the actual data before designing anything — this is the standing lesson i
 - Asana was retired entirely (2026-07-07): the PAT and `mcp__claude_ai_Asana__*`
   allow rules were removed from `.claude/settings.local.json`; the Teams-to-Asana
   bridge no longer exists. Don't suggest Asana integrations here.
+- **`overrides: { tmp: "^0.2.7" }` in package.json is a workaround, not a preference**
+  (added 2026-08-01). `@anthropic-ai/mcpb` → `@inquirer/prompts` → `@inquirer/editor` →
+  `external-editor` pins `tmp@^0.0.33`, and `^0.0.x` locks to exactly that patch — so
+  `tmp` could not reach the patched 0.2.6 by any bump, and mcpb 2.1.2 is already latest.
+  `npm audit` reported `fixAvailable: false` for the whole chain. **Remove the override
+  once mcpb ships an `@inquirer/prompts` whose `external-editor` allows tmp ≥ 0.2.6** —
+  check with `npm audit` after the override is deleted, not by reading version numbers.
+  Safe today because `external-editor` calls exactly one tmp API, `tmpNameSync(options)`,
+  which still exists in 0.2.7 (verified by constructing a real `ExternalEditor`).
+  → This affects **no consumer**: `files` ships `dist` + the pruned DB + README (never
+  `node_modules`), the MCPB bundle installs `--omit=dev`, and npm ignores a *dependency's*
+  `overrides` — the field only applies at the root of an install.
 - **A red `build-mcpb` on main is stale until proven otherwise.** That workflow runs
   only on `workflow_dispatch` and `release` — never on push — so main's Actions view
   shows the latest manual-dispatch or release-triggered run, which can predate any
