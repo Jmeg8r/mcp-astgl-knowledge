@@ -15,6 +15,7 @@ import { homedir } from "os";
 import { randomUUID, createHash } from "crypto";
 import Database from "better-sqlite3";
 import { resolveQueryLogDbPath } from "./db-path.js";
+import { ensureQueryLogSchema } from "./query-log-schema.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const RATE_DB_PATH = resolveQueryLogDbPath();
@@ -96,29 +97,17 @@ export function initRateLimitDb(): void {
   // WHY: Query counts are already there — just need a registrations table
   rateLimitDb = new Database(RATE_DB_PATH);
 
-  // Ensure query_log table exists (may not if server hasn't been used yet)
-  rateLimitDb.exec(`
-    CREATE TABLE IF NOT EXISTS query_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT NOT NULL,
-      client_id TEXT NOT NULL,
-      tool_name TEXT NOT NULL,
-      query_params TEXT NOT NULL,
-      content_cited TEXT,
-      response_time_ms INTEGER NOT NULL,
-      confidence_score REAL
-    )
-  `);
+  // WHAT: Pin WAL here too — this module can be the one that creates the file.
+  // WHY:  initRateLimitDb() and initQueryLog() open the same database and either
+  //       can run first against a path where it does not exist yet. Full
+  //       rationale in query-log.ts's initQueryLog().
+  rateLimitDb.pragma("journal_mode = WAL");
 
-  rateLimitDb.exec(
-    "CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(timestamp)"
-  );
-  rateLimitDb.exec(
-    "CREATE INDEX IF NOT EXISTS idx_query_log_tool ON query_log(tool_name)"
-  );
-  rateLimitDb.exec(
-    "CREATE INDEX IF NOT EXISTS idx_query_log_client ON query_log(client_id)"
-  );
+  // WHAT: Ensure query_log exists — this module may open the file first.
+  // WHY:  Shared with query-log.ts rather than duplicated here. This copy had
+  //       already drifted (it declared a third index the other did not), which
+  //       `CREATE TABLE IF NOT EXISTS` hides by never erroring (Mistake #8).
+  ensureQueryLogSchema(rateLimitDb);
 
   rateLimitDb.exec(`
     CREATE TABLE IF NOT EXISTS registrations (
