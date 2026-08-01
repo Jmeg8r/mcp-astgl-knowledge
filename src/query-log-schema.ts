@@ -53,17 +53,16 @@ const CONTENT_CITED_EMPTY = "'[]'";
 
 // WHAT: Does this database's content_cited already refuse NULL?
 // WHY:  Read from PRAGMA table_info rather than by matching the stored DDL text:
-//       the constraint is what SQLite enforces, not how it was spelled. Returns
-//       false for a table that has no such column at all, which is the safe
-//       direction — it triggers the rebuild that adds it.
-function contentCitedIsEnforced(db: Db): boolean {
+//       the constraint is what SQLite enforces, not how it was spelled.
+//       `undefined` means the column is absent, which is distinct from present
+//       and nullable — see ensureQueryLogSchema.
+function contentCitedColumn(db: Db): { notnull: number } | undefined {
   const columns = db.pragma("table_info(query_log)") as Array<{
     name: string;
     notnull: number;
   }>;
 
-  const column = columns.find((c) => c.name === "content_cited");
-  return column !== undefined && column.notnull === 1;
+  return columns.find((c) => c.name === "content_cited");
 }
 
 // WHAT: Rebuild query_log with the constraint, preserving every row.
@@ -71,6 +70,10 @@ function contentCitedIsEnforced(db: Db): boolean {
 //       path is create-copy-drop-rename. Wrapped in a transaction because a
 //       failure between the DROP and the RENAME would lose the analytics history
 //       outright — and this runs at server start, unattended.
+//
+//       Requires content_cited to exist: both the backfill and the copy name it.
+//       ensureQueryLogSchema enforces that precondition rather than this function
+//       silently tolerating its absence.
 function migrateLegacyTable(db: Db): void {
   db.transaction(() => {
     // Backfill first: rows written before the constraint may hold NULL, and the
@@ -101,7 +104,25 @@ function migrateLegacyTable(db: Db): void {
 export function ensureQueryLogSchema(db: Db): void {
   db.exec(`CREATE TABLE IF NOT EXISTS query_log (${QUERY_LOG_COLUMNS})`);
 
-  if (!contentCitedIsEnforced(db)) {
+  const column = contentCitedColumn(db);
+
+  // WHAT: A query_log with no content_cited column at all.
+  // WHY:  Every version of this table has had the column since the schema was
+  //       written — the only thing that changed is the constraint on it. So this
+  //       is not a legacy shape to migrate; it is a table this system did not
+  //       create, and rebuilding it would mean inventing the citation history
+  //       that claudeclaw reads. Fail with a message that names the situation,
+  //       rather than letting the rebuild throw a bare "no such column".
+  if (column === undefined) {
+    throw new Error(
+      "query_log exists without a content_cited column — this is not a schema " +
+        "version this system has ever written. Refusing to rebuild it, because " +
+        "doing so would fabricate the citation history. Inspect the database at " +
+        "the resolved query-log path before continuing."
+    );
+  }
+
+  if (column.notnull !== 1) {
     migrateLegacyTable(db);
   }
 
