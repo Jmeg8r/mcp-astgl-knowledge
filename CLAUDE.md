@@ -266,10 +266,18 @@ A fresh clone that needs real data should populate it through the **incremental*
 database in. **Not `npm run ingest`:** that is the destructive rebuild of Mistake #2, and
 because `resolveKnowledgeDbPath()` selects `data/knowledge.db` whenever it exists, running
 it here targets the tracked file and drops whatever the incremental pipelines have already
-built. If `ingest` genuinely is the right tool, Mistake #2's preconditions apply in full —
-fresh timestamped backup, James's explicit approval in-session, and a stated plan to re-run
-every incremental pipeline afterwards. Either way, do not solve a stale clone by committing
-the result.
+built. If `ingest` genuinely is the right tool, Mistake #2's preconditions apply in full — a
+**verified** timestamped backup, James's explicit approval in-session, and a stated plan to
+re-run every incremental pipeline afterward.
+
+"Verified" means the standard `src/prune-backups.ts` already implements, not merely that a
+`cp` returned 0: `PRAGMA integrity_check` returns `ok`, the copy's article count matches
+the live database, its content hash is byte-identical, and its **whole** schema matches —
+every `sqlite_master` row, not `pragma_table_info('articles')` alone, since a change to
+`chunks`, `vec_chunks`, `ideas`, `rewrite_jobs` or `ecosystem_snapshots` is invisible to a
+single-table check. An unverified copy is a restore point you have assumed, and the whole
+point of taking one before a DROP is that you will need it on the day the assumption is
+wrong. Either way, do not solve a stale clone by committing the result.
 
 Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
 release act (it ships in the npm package)". That stopped being true on 2026-07-29 and
