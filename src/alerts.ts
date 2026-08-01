@@ -23,9 +23,10 @@
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
+import { resolveQueryLogDbPath } from "./db-path.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
-const QUERY_LOG_PATH = join(DATA_DIR, "query-log.db");
+const QUERY_LOG_PATH = resolveQueryLogDbPath();
 const KNOWLEDGE_PATH = join(DATA_DIR, "knowledge.db");
 const ALERT_DB_PATH = join(DATA_DIR, "alerts.db");
 

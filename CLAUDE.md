@@ -29,7 +29,7 @@ whole file before your first edit.
 |---|---|---|---|
 | `knowledge.db` | `ingest.ts` (DESTRUCTIVE rebuild), `knowledge-db.ts` (sanctioned incremental path used by structure/drafts/projects/wiki/freshness/rewrite), `ideas.ts`, `related-articles.ts` | MCP server (read-only), everything else | Tracked in git. **NO LONGER SHIPPED** — as of 2026-07-29 the package ships the pruned `build/knowledge-public.db` instead (ADR-0001). |
 | `build/knowledge-public.db` | `build-public-db.ts` only | the published npm package | **Gitignored build artifact, regenerated on every publish.** Contains only `public = 1` rows. Never commit it — two databases in the repo can disagree. |
-| `query-log.db` | `query-log.ts` (buffered), `rate-limit.ts` | daily-report, alerts, dashboard, ideas | WAL mode; `-wal`/`-shm` sidecars are normal. Gitignored. `content_cited` is JSON `'[]'`, never NULL — claudeclaw reads it. |
+| `query-log.db` | `query-log.ts` (buffered), `rate-limit.ts` | daily-report, alerts, dashboard, ideas | **`delete` journal mode, NOT WAL** — this table claimed WAL until 2026-08-01; `PRAGMA journal_mode` says otherwise and no code ever set it, so expect no `-wal`/`-shm` sidecars. Gitignored. `content_cited` is JSON `'[]'`, never NULL — claudeclaw reads it. |
 | `discovery.db` | `discover.ts` via `discovery-db.ts` | `structure.ts` (opens it raw — known wart) | Crawl queue; `is_new=1` marks unprocessed. Gitignored. |
 | `alerts.db` | `alerts.ts` AND `freshness.ts` (duplicate schema, different cooldowns — 24h vs 7d) | same | Alert dedup history. Gitignored. |
 | `citation-test.db` | `citation-test.ts`, `citation-test-auto.ts` | same | AEO citation history. Gitignored. |
@@ -541,6 +541,11 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 
 → **Rule: never add `data/knowledge.db` back to `package.json` `files`, and never resolve a
 DB path directly — use `src/db-path.ts`.** Anything that publishes must go through the prune.
+That rule now covers `query-log.db` too (added 2026-08-01): six modules had hardcoded it —
+`query-log.ts`, `rate-limit.ts`, `ideas.ts`, `dashboard.ts`, `daily-report.ts`, `alerts.ts` —
+and **`rate-limit.ts` deliberately shares that same file**, so redirecting one of them would
+have split the writer from five readers *and* from rate limiting. Use
+`resolveQueryLogDbPath()`. `ASTGL_QUERY_LOG_DB` overrides it and is a test seam only.
 
 → **Rule: the gate covers npm, NOT git.** This repo is public, and `data/knowledge.db` is
 tracked at a stale 144-article revision. Committing the working file would put its withheld

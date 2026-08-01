@@ -7,21 +7,38 @@
  * Performance:
  *   Entries are buffered in memory and flushed to SQLite in batches
  *   (every 5 seconds or when buffer hits 20 entries) to avoid blocking responses.
+ *   Buffering means the process can die holding unwritten entries, so every path
+ *   out of the process flushes — see registerShutdownHooks().
  */
 
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
+import { resolveQueryLogDbPath } from "./db-path.js";
 import type { QueryLogEntry } from "./types.js";
 
-const LOG_DB_PATH = join(import.meta.dirname, "..", "data", "query-log.db");
+// WHY: Resolved via db-path.ts, which is also what rate-limit.ts and the four
+//      analytics readers use — this file is shared, so the path rule cannot live
+//      in six places (Mistake #8).
+const LOG_DB_PATH = resolveQueryLogDbPath();
 
 const FLUSH_INTERVAL_MS = 5_000;
 const FLUSH_BATCH_SIZE = 20;
 
+// WHAT: Signals that mean "this process is going away".
+// WHY:  An MCP stdio server is spawned by its client and torn down with SIGTERM
+//       when the session ends; SIGINT is the interactive equivalent.
+const TERMINATION_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
+
 let logDb: InstanceType<typeof Database> | null = null;
 let buffer: QueryLogEntry[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
+
+// WHAT: Whether process-level shutdown hooks have been installed.
+// WHY:  initQueryLog() is called once per process in production but repeatedly
+//       across tests. Without this guard each call stacks another listener set and
+//       Node warns about a leak at 11.
+let shutdownHooksRegistered = false;
 
 export function initQueryLog(): InstanceType<typeof Database> {
   const dataDir = join(import.meta.dirname, "..", "data");
@@ -56,11 +73,47 @@ export function initQueryLog(): InstanceType<typeof Database> {
   flushTimer = setInterval(flushBuffer, FLUSH_INTERVAL_MS);
   flushTimer.unref(); // Don't keep process alive just for logging
 
-  // WHAT: Flush on process exit
-  // WHY: Don't lose buffered entries when the MCP server shuts down
-  process.on("beforeExit", flushBuffer);
+  registerShutdownHooks();
 
   return logDb;
+}
+
+// WHAT: Flush the buffer on every path this process can leave by.
+// WHY:  'beforeExit' alone loses data. It fires only when the event loop drains
+//       naturally — NOT when the process is killed by a signal, and NOT on an
+//       explicit process.exit(). An MCP stdio server is client-spawned and torn
+//       down with SIGTERM at session end, so before this every entry logged inside
+//       the trailing FLUSH_INTERVAL_MS window was silently lost. Measured against
+//       the previous code: a child SIGTERM'd 0.5s after logQuery() persisted 0
+//       rows, while the same child left alive past the 5s timer persisted 1.
+function registerShutdownHooks(): void {
+  if (shutdownHooksRegistered) return;
+  shutdownHooksRegistered = true;
+
+  // Event loop drained on its own.
+  process.on("beforeExit", flushBuffer);
+
+  // WHAT: Last-resort synchronous flush.
+  // WHY:  'exit' is the only hook that still runs after process.exit(), which
+  //       src/index.ts calls on a fatal error. Only synchronous work is permitted
+  //       here, which flushBuffer already is — better-sqlite3 is synchronous.
+  process.on("exit", flushBuffer);
+
+  for (const signal of TERMINATION_SIGNALS) {
+    process.once(signal, () => handleTerminationSignal(signal));
+  }
+}
+
+// WHAT: Flush, release the database, then let the signal do what it would have done.
+// WHY:  Installing ANY listener for SIGTERM/SIGINT suppresses Node's default
+//       terminate-the-process behavior, so a handler that merely flushes would hang
+//       the server forever on shutdown — turning a data-loss bug into a worse one.
+//       Re-raising after `once` has removed this listener restores the default:
+//       the process dies of the signal, and its parent sees "killed by SIGTERM"
+//       rather than a synthetic exit code, which is what a supervisor expects.
+function handleTerminationSignal(signal: NodeJS.Signals): void {
+  closeQueryLog();
+  process.kill(process.pid, signal);
 }
 
 // WHAT: Buffer log entries and flush when threshold is reached

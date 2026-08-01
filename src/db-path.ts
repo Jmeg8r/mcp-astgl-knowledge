@@ -1,7 +1,7 @@
 /**
- * Knowledge database path resolution.
+ * Database path resolution.
  *
- * WHAT: The single place that knows where knowledge.db lives.
+ * WHAT: The single place that knows where knowledge.db and query-log.db live.
  * WHY:  There are two valid locations depending on how the code is running, and
  *       three modules on the MCP server's import graph need the same answer.
  *       Three copies of this rule is three places to drift (Mistake #8).
@@ -40,4 +40,27 @@ export function resolveKnowledgeDbPath(): string {
 //       real problem is that the other location is the one that mattered.
 export function describeSearchedPaths(): string {
   return `${FULL_DB_PATH} or ${PUBLIC_DB_PATH}`;
+}
+
+const QUERY_LOG_DB_PATH = join(
+  import.meta.dirname,
+  "..",
+  "data",
+  "query-log.db"
+);
+
+// WHAT: Resolve where the analytics/rate-limit database lives.
+// WHY:  SIX modules used to hardcode this path independently — query-log.ts,
+//       rate-limit.ts, ideas.ts, dashboard.ts, daily-report.ts and alerts.ts —
+//       and rate-limit.ts deliberately shares the same FILE as the query log.
+//       That made the override below actively dangerous to add anywhere else:
+//       redirecting one writer would silently split it from five readers and from
+//       rate limiting, which is Mistake #8 with a worse blast radius than usual.
+//       One resolver, so a redirect moves all of them or none.
+//
+//       ASTGL_QUERY_LOG_DB exists so tests can point at a throwaway database.
+//       Without it the only way to test durability is to write probe rows into the
+//       real analytics database and delete them afterwards.
+export function resolveQueryLogDbPath(): string {
+  return process.env.ASTGL_QUERY_LOG_DB || QUERY_LOG_DB_PATH;
 }
