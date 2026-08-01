@@ -86,14 +86,15 @@ content, zero private IPs, no email addresses. The eight `sk-`/`ghp_`/`AKIA` pat
 are all false positives — slugs such as `task-group-cancellation`, plus one page that
 *describes* secret-detection regexes as teaching material.
 
-Four items would nonetheless go public that should not:
+Four items surfaced in the audit as carrying detail that should be disclosed by choice
+rather than published by tag. **Three were excluded; the fourth was deliberately kept:**
 
-| Page | Exposure category |
-|---|---|
-| `Income Investor` | Unlaunched-product and business-status detail |
-| `astgl-gtm` | Private workspace detail |
-| `OpenClaw` | Historical security-posture detail (pre-hardening) |
-| `Autonomous Commerce Agent (ACA)` | Local-environment identifiers |
+| Page | Exposure category | Outcome |
+|---|---|---|
+| `Income Investor` | Unlaunched-product and business-status detail | withheld (`public = 0`) |
+| `astgl-gtm` | Private workspace detail | withheld (`public = 0`) |
+| `Autonomous Commerce Agent (ACA)` | Local-environment identifiers | withheld (`public = 0`) |
+| `OpenClaw` | Security-posture detail | **ships** (`public = 1`) |
 
 > [!NOTE]
 > **Redacted 2026-07-31.** This table originally spelled out *what* each page exposes. That
@@ -108,10 +109,22 @@ Four items would nonetheless go public that should not:
 > a public repository, which is a separate and much larger decision. Treat the underlying
 > facts as already disclosed and decide on that basis.
 
-None is catastrophic; OpenClaw is retired and reads as a before/after case study — it is in
-fact allowlisted in `src/public-allowlist.ts` and ships in the package, so only three of
-these four are actually withheld. But these are facts that should be *disclosed by choice*,
-not published by tag.
+`OpenClaw` is named in `src/public-allowlist.ts` and verified present in published npm
+1.3.0. It ships as part of the approved **own agent stack** group (`docs/entity-allowlist.md`,
+approved 2026-07-29), on the rationale that shipping those pages builds authority and
+doubles as discovery for projects the newsletter covers.
+
+> [!WARNING]
+> **The original justification for that decision was "OpenClaw is retired and reads as a
+> before/after case study." That reason is stale.** `docs/entity-allowlist.md` records, as
+> of 2026-07-29, that `~/.openclaw/` is still present on disk and that live ClaudeClaw code
+> still references paths beneath it. So the page ships on the agent-stack rationale, not
+> because the thing it describes is retired — and a reader should not infer that the
+> security-posture detail it carries is historical. Whether it should still ship on that
+> basis is a live decision, not one this ADR settled. Flagged 2026-07-31.
+
+The other three are withheld. These are facts that should be *disclosed by choice*, not
+published by tag.
 
 **Usefulness audit — this is the binding constraint.** Of 190 pages, roughly 40 are generic
 tool stubs (Git, React, Next.js, Vite, Xcode, Swift, Sparkle, Homebrew, Blender, CapCut)
