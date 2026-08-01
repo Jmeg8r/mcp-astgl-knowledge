@@ -582,13 +582,28 @@ downloads it, extracts `build/knowledge-public.db`, and counts rows. It runs as 
   published tarball directly, not via the aggregate:
 
   ```bash
-  npm pack mcp-astgl-knowledge@"$(npm view mcp-astgl-knowledge version)" --pack-destination /tmp >/dev/null \
-    && tar -xzOf /tmp/mcp-astgl-knowledge-*.tgz package/build/knowledge-public.db > /tmp/pub.db \
-    && sqlite3 -readonly /tmp/pub.db "SELECT COUNT(*) FROM articles WHERE title = '<withdrawn title>';"
+  TITLE="OpenClaw"; CONTROL="ClaudeClaw"; VERSION="1.3.1"
+  DIR="$(mktemp -d)"
+  TARBALL="$(npm pack "mcp-astgl-knowledge@$VERSION" --pack-destination "$DIR" --silent)"
+  tar -xzOf "$DIR/$TARBALL" package/build/knowledge-public.db > "$DIR/pub.db"
+  sqlite3 -readonly "$DIR/pub.db" "SELECT 'withdrawn=' || COUNT(*) FROM articles WHERE title = '${TITLE//\'/\'\'}';"
+  sqlite3 -readonly "$DIR/pub.db" "SELECT 'control='   || COUNT(*) FROM articles WHERE title = '${CONTROL//\'/\'\'}';"
   ```
 
-  `0` is the pass. `npm run publish-drift` remains the aggregate check and answers a
-  different question — whether the corpus as a whole drifted — so run both.
+  `withdrawn=0` **with `control=1`** is the pass. The control is not decoration: without a
+  title known to be present, `0` is equally consistent with the query being wrong, the
+  wrong tarball, or an empty database — the same "the probe never ran" ambiguity that makes
+  a silent check indistinguishable from a passing one.
+
+  Three details are load-bearing. **Pin `VERSION` to the release you just cut**, never
+  `npm view … version` — that follows the mutable `latest` tag, so a later release silently
+  redirects the check. **Extract into `mktemp -d`**, never a `/tmp/*.tgz` glob, which can
+  match a stale tarball or hand `tar` several paths. **Escape the title** (`${TITLE//\'/\'\'}`
+  doubles single quotes) — ASCII apostrophes are common in these titles and would otherwise
+  break the SQL literal.
+
+  `npm run publish-drift` remains the aggregate check and answers a different question —
+  whether the corpus as a whole drifted — so run both.
 
 → **Rule: `getSnapshot`/`upsertSnapshot` and the `ecosystem_snapshots` DDL now live ONLY in
 `knowledge-db.ts`.** `freshness.ts` used to carry a second copy of all three; do not
