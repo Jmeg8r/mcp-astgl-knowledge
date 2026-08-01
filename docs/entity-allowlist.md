@@ -50,16 +50,18 @@ that its content should be read as current rather than historical. The specifics
 deliberately not restated here; this file is public, and enumerating why a withheld page is
 sensitive re-discloses what withholding it prevents.
 
-Consequence: the page publishes the directory layout of something that still exists rather
-than something deleted. It names no credentials — the pre-hardening posture is explicitly
-paired with the SecureClaw remediation that followed — so this is a disclosure-hygiene
-question, not an exposure.
-
 **Pulled 2026-07-31.** It was shipped as approved on the "retired case study" reading; once
-that framing was confirmed stale — the page documents the layout of something that still
-exists — James decided to withhold it. Removed from `ENTITY_ALLOWLIST`; the fail-closed
-default handles the rest. Note this does **not** retract npm 1.3.0, which already contains
-the page and cannot be altered; the change takes effect on the next publish.
+that framing was confirmed stale, James decided to withhold it. Removed from
+`ENTITY_ALLOWLIST`; the fail-closed default handles the rest. Note this does **not** retract
+npm 1.3.0, which already contains the page and cannot be altered; the change took effect
+with **1.3.1**.
+
+> [!NOTE]
+> **Redacted 2026-08-01.** A paragraph here described the nature of the exposure, directly
+> beneath the sentence saying the specifics would not be restated. Removed for the reason
+> that sentence gives. Same forward-looking caveat as ADR-0001's redaction note: the
+> original wording remains in git history, so treat the underlying facts as disclosed and
+> decide on that basis.
 
 ---
 

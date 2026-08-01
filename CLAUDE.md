@@ -582,7 +582,7 @@ downloads it, extracts `build/knowledge-public.db`, and counts rows. It runs as 
   published tarball directly, not via the aggregate:
 
   ```bash
-  TITLE="OpenClaw"; CONTROL="ClaudeClaw"; VERSION="1.3.1"
+  TITLE="<the withdrawn title>"; CONTROL="<a title you know still ships>"; VERSION="<the release you just cut>"
   DIR="$(mktemp -d)"
   TARBALL="$(npm pack "mcp-astgl-knowledge@$VERSION" --pack-destination "$DIR" --silent)"
   tar -xzOf "$DIR/$TARBALL" package/build/knowledge-public.db > "$DIR/pub.db"
