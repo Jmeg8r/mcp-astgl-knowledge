@@ -114,12 +114,11 @@ group, on the rationale that shipping those pages builds authority and doubles a
 discovery. It shipped in npm 1.3.0.
 
 > [!IMPORTANT]
-> **Removed from the allowlist 2026-07-31.** The justification recorded here — "OpenClaw
-> is retired and reads as a before/after case study" — was stale on the day it was
-> written: `docs/entity-allowlist.md` notes, dated 2026-07-29, that `~/.openclaw/` is
-> still present on disk and that live ClaudeClaw code still references paths beneath it.
-> The security-posture detail the page carries is therefore current rather than
-> historical, and James decided on 2026-07-31 to withhold it.
+> **Removed from the allowlist 2026-07-31**, by the repo owner's decision. The
+> justification recorded here — that the page describes something no longer in use — did
+> not hold when checked, so the "historical" reading it relied on does not apply. The
+> supporting detail is deliberately not restated: this file is public, and spelling out
+> why a withheld page is sensitive re-discloses what withholding it prevents.
 >
 > **This does not retract npm 1.3.0.** That version still contains the page and cannot be
 > altered — npm versions are immutable. The change takes effect on the next publish, when
@@ -148,7 +147,8 @@ no standing in.
   `Mac Studio`, and `Apple Silicon` earn their place, `Vite` and `Income Investor` do not.
 
 Net, once the allowlist was actually drafted and approved: **100 pages** — 68 concepts (74
-less the 6 internal-jargon pages) plus 32 allowlisted entities — instead of 190 pages of
+less the 6 internal-jargon pages) plus 32 allowlisted entities (**31 from 2026-07-31**, when
+`OpenClaw` was removed, making the total **99**) — instead of 190 pages of
 mixed signal. See `docs/entity-allowlist.md` for the per-entity buckets.
 
 **Why a second gate is required.** The `astgl` tag is doing two incompatible jobs. Inside
@@ -164,6 +164,8 @@ closed. One field cannot be both.
 > `package.json` `files` ships `build/knowledge-public.db` rather than `data/knowledge.db`.
 > Measured result: **178 of 469 articles publish** — 78 published newsletter pieces, 68
 > concepts, 32 allowlisted entities; 291 withheld, of which **201 are unpublished drafts**
+> (all figures as of 2026-07-29; from 2026-07-31 the entity allowlist is 31 and one further
+> row is withheld)
 > (see the amendment below).
 
 **Where the gate sits: publish time, not ingest time (decided 2026-07-29).** MAESTER and

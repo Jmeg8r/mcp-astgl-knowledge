@@ -179,8 +179,10 @@ and its **whole** `sqlite_master` schema matches (not `pragma_table_info('articl
 alone; a change to `chunks`, `vec_chunks`, `ideas`, `rewrite_jobs` or
 `ecosystem_snapshots` is invisible to a single-table check). A copy that has not passed
 those four is a restore point you have assumed, and the day you need it is the day the
-assumption was wrong. See *Backup retention* for eligibility — the newest checkpoint, or
-a backup within `--keep-days` that is also schema-compatible.
+assumption was wrong. Eligibility is a conjunction, not a
+choice: **(newest checkpoint OR within `--keep-days`, default 30) AND all four checks
+above**, schema compatibility included. The newest checkpoint is not exempt — it is the
+most likely candidate, not an automatically valid one. See *Backup retention*.
 
 **3. The Cron Mirage.** Something runs at the wrong time, so you edit `cron/*.json`
 or add a crontab entry. Nothing changes (descriptors), or you've created a duplicate
@@ -251,7 +253,7 @@ meant to prevent. The categories above are the right level of detail here.
 
 (The fourth, `OpenClaw`, was allowlisted and shipped in npm 1.3.0, but was **removed from
 `src/public-allowlist.ts` on 2026-07-31** — ADR-0001's "it is retired" justification was
-stale, and the page documents something still on disk. It is withheld from the next publish
+stale on inspection. It is withheld from the next publish
 onward; 1.3.0 is immutable and still carries it. Noted so nobody re-reads the ADR's table as
 four uniformly-withheld pages, as this rule's first draft did.)
 
@@ -519,8 +521,8 @@ drafts (43% of rows) and 90 private-project wiki pages. It is no longer shipped.
 - **`npm run reclassify-wiki`** — re-derives `public` for already-indexed rows without
   re-embedding. Sync is mtime-incremental, so an unchanged page is never re-processed and an
   allowlist edit would otherwise change nothing. Available to run by hand, but you do not
-  have to remember to: it is wired into `prepublishOnly`.
-- **`prepublishOnly`** runs build → **reclassify** → prune, in that order, so a publish can
+  have to remember to: it is wired into `prepack`.
+- **`prepack`** runs build → **reclassify** → prune, in that order, so a publish can
   neither skip the gate nor ship flags that predate the current allowlist. Do not reorder or
   drop the reclassify step — without it, editing `public-allowlist.ts` and publishing would
   ship stale `public = 1` rows.

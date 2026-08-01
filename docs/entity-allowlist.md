@@ -44,11 +44,11 @@ as discovery for projects covered in the newsletter. See the OpenClaw note below
 
 ### Note — the OpenClaw page's "retired" framing is stale (and why it is now withheld)
 
-The page states OpenClaw was *"archived with 30-day deletion timer"* in late April 2026.
-Checked 2026-07-29: **`~/.openclaw/` is still present on disk**, and ClaudeClaw's live code
-still references paths beneath it (`src/session-files.ts`, `src/pipeline/skills/vercel-publish.ts`).
-The ClawPad WebSocket port the page names (18789) returns no hits in ClaudeClaw, so that
-detail is genuinely dead.
+The page presents itself as describing something archived in April 2026. Checked
+2026-07-29: that framing does not hold — enough of what the page documents is still in use
+that its content should be read as current rather than historical. The specifics are
+deliberately not restated here; this file is public, and enumerating why a withheld page is
+sensitive re-discloses what withholding it prevents.
 
 Consequence: the page publishes the directory layout of something that still exists rather
 than something deleted. It names no credentials — the pre-hardening posture is explicitly

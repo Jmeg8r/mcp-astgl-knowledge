@@ -317,7 +317,7 @@ function reclassifyExisting(): void {
         // WHY: Name every gate flip, in both modes. The gate is fail-closed, so
         //      a page becoming public means someone edited public-allowlist.ts —
         //      printing which page makes the consequence of that edit visible
-        //      rather than inferred from a count. prepublishOnly runs this
+        //      rather than inferred from a count. prepack runs this
         //      immediately before the prune, so the lines appear at publish time.
         console.error(
           `    ${want === 1 ? "→ PUBLIC  " : "→ withheld"} [${row.content_type}] ${row.title.slice(0, 58)}`
