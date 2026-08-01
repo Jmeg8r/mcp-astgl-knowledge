@@ -169,9 +169,18 @@ It `DROP TABLE`s articles/chunks/vec_chunks and rebuilds **only** from astgl-sit
 markdown — silently destroying everything added by discovery, drafts, projects, and
 wiki sync (the DB grew 8 MB → 50 MB from those sources; ingest would torch it).
 → **Rule: never run `npm run ingest` (or any DROP) against `data/knowledge.db` without
-(a) a fresh timestamped backup, (b) explicit approval from James in this session, and
-(c) a stated plan to re-run every incremental pipeline afterward. Incremental fixes go
-through `knowledge-db.ts` upserts instead.**
+(a) a VERIFIED timestamped restore point, (b) explicit approval from James in this
+session, and (c) a stated plan to re-run every incremental pipeline afterward.
+Incremental fixes go through `knowledge-db.ts` upserts instead.**
+
+"Verified" is the standard `src/prune-backups.ts` implements — `PRAGMA integrity_check`
+returns `ok`, the copy's article count matches live, its content hash is byte-identical,
+and its **whole** `sqlite_master` schema matches (not `pragma_table_info('articles')`
+alone; a change to `chunks`, `vec_chunks`, `ideas`, `rewrite_jobs` or
+`ecosystem_snapshots` is invisible to a single-table check). A copy that has not passed
+those four is a restore point you have assumed, and the day you need it is the day the
+assumption was wrong. See *Backup retention* for eligibility — the newest checkpoint, or
+a backup within `--keep-days` that is also schema-compatible.
 
 **3. The Cron Mirage.** Something runs at the wrong time, so you edit `cron/*.json`
 or add a crontab entry. Nothing changes (descriptors), or you've created a duplicate
@@ -261,23 +270,29 @@ exists and only falls back to the pruned artifact otherwise, so **a fresh clone 
 stale 144-article database** — the MCP server and every tool will serve 2026-07-13 content
 until the pipelines repopulate it. On a working machine the file has long since been
 overwritten by the incremental pipelines, which is why this is invisible day to day.
-A fresh clone that needs real data should populate it through the **incremental** paths —
-`npm run sync-wiki`, `ingest-drafts`, `ingest-projects`, `structure` — or by copying a
-database in. **Not `npm run ingest`:** that is the destructive rebuild of Mistake #2, and
+A fresh clone that needs real data should populate it through the **incremental** paths,
+each a real npm script:
+
+```bash
+npm run sync-wiki        # SecondBrain wiki subset (needs /Volumes/Research mounted)
+npm run ingest-drafts    # unpublished drafts
+npm run ingest-projects  # project docs from astgl-site projects.json
+npm run structure        # discovered astgl.ai content (needs Ollama)
+```
+
+or by copying a populated database in:
+
+```bash
+cp /path/to/populated/knowledge.db data/knowledge.db
+```
+
+**Not `npm run ingest`:** that is the destructive rebuild of Mistake #2, and
 because `resolveKnowledgeDbPath()` selects `data/knowledge.db` whenever it exists, running
 it here targets the tracked file and drops whatever the incremental pipelines have already
-built. If `ingest` genuinely is the right tool, Mistake #2's preconditions apply in full — a
-**verified** timestamped backup, James's explicit approval in-session, and a stated plan to
-re-run every incremental pipeline afterward.
-
-"Verified" means the standard `src/prune-backups.ts` already implements, not merely that a
-`cp` returned 0: `PRAGMA integrity_check` returns `ok`, the copy's article count matches
-the live database, its content hash is byte-identical, and its **whole** schema matches —
-every `sqlite_master` row, not `pragma_table_info('articles')` alone, since a change to
-`chunks`, `vec_chunks`, `ideas`, `rewrite_jobs` or `ecosystem_snapshots` is invisible to a
-single-table check. An unverified copy is a restore point you have assumed, and the whole
-point of taking one before a DROP is that you will need it on the day the assumption is
-wrong. Either way, do not solve a stale clone by committing the result.
+built. If `ingest` genuinely is the right tool, **Mistake #2's preconditions apply in full** —
+including its definition of a *verified* restore point, which is stated there and not
+repeated here so the two cannot drift. Either way, do not solve a stale clone by committing
+the result.
 
 Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
 release act (it ships in the npm package)". That stopped being true on 2026-07-29 and
