@@ -229,12 +229,16 @@ and ask.**
 
 → **Rule: NEVER commit `data/knowledge.db`. This repository is PUBLIC, and the working
 copy holds hundreds of rows the publication gate exists to withhold.** Measured
-2026-07-31: 475 articles, of which **178 are `public = 1` and 297 are withheld** — 206
+**2026-07-31** (later than ADR-0001's 469/471-article figures elsewhere in this file and
+in the ADR itself — the database grows daily, so any two counts written on different days
+will disagree and neither is wrong): 475 articles, of which **178 are `public = 1` and 297
+are withheld** — 206
 unpublished drafts in full searchable text, 85 non-allowlisted entities, 6
-internal-jargon concepts. Those 85 include three of the four ADR-0001 named individually
-— `Income Investor` (business-legal status and state of residence), `astgl-gtm` (a private
-workspace path), and `Autonomous Commerce Agent (ACA)` (a `/Users/…` username). Read those
-counts as a timestamp, not a constant.
+internal-jargon concepts, as of that date — read every count here as a timestamp, not a
+constant. Three of the four pages ADR-0001 called out are among the withheld; **do not
+restate what makes them sensitive in this file.** CLAUDE.md is itself public, so
+describing the attributes of withheld rows re-discloses exactly what withholding them was
+meant to prevent. The categories above are the right level of detail here.
 
 (The fourth, `OpenClaw`, is `public = 1` and **does ship** — it is named in
 `src/public-allowlist.ts` deliberately, consistent with ADR-0001's own conclusion that it
@@ -246,10 +250,17 @@ pages, as this rule's first draft did.)
 `package.json` `files` ships `build/knowledge-public.db`, and `prepack` runs the prune —
 and never addressed the second channel. Committing `data/knowledge.db` walks straight
 past all of it, into public history, permanently. The file is still *tracked* at an old
-144-article revision from 2026-07-13; **leave it stale.** That staleness is now load-
-bearing, not neglect: ADR-0001 stopped shipping the file, `src/db-path.ts` resolves the
-pruned artifact for installed packages, and `npm run publish-drift` measures the gap
-deliberately. Nothing needs the tracked copy to be current.
+144-article revision from 2026-07-13; **leave it stale.** That staleness is load-bearing
+rather than neglect — it is the only thing keeping the withheld rows out of public
+history.
+
+But it is NOT inert. `resolveKnowledgeDbPath()` returns `data/knowledge.db` whenever it
+exists and only falls back to the pruned artifact otherwise, so **a fresh clone reads the
+stale 144-article database** — the MCP server and every tool will serve 2026-07-13 content
+until the pipelines repopulate it. On a working machine the file has long since been
+overwritten by the incremental pipelines, which is why this is invisible day to day.
+A fresh clone that needs real data must run the ingest/sync pipelines (or copy a database
+in) before local results mean anything; it must not solve that by committing the result.
 
 Corollary: the earlier version of this rule said a `knowledge.db` commit is "a deliberate
 release act (it ships in the npm package)". That stopped being true on 2026-07-29 and

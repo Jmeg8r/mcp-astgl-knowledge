@@ -88,15 +88,30 @@ are all false positives — slugs such as `task-group-cancellation`, plus one pa
 
 Four items would nonetheless go public that should not:
 
-| Page | Exposure |
+| Page | Exposure category |
 |---|---|
-| `Income Investor` | Unlaunched product, its stack, and that monetization is "gated on a Florida securities-attorney review" — business-legal status and state of residence |
-| `astgl-gtm` | Existence and local path of a private go-to-market workspace |
-| `OpenClaw` | James's own pre-hardening security posture (plaintext credentials in `.bak` files, `bypassPermissions` on the main agent, auto-loaded plugins) |
-| `Autonomous Commerce Agent (ACA)` | `/Users/jamescruce/…` — macOS username embedded in a shipped artifact |
+| `Income Investor` | Unlaunched-product and business-status detail |
+| `astgl-gtm` | Private workspace detail |
+| `OpenClaw` | Historical security-posture detail (pre-hardening) |
+| `Autonomous Commerce Agent (ACA)` | Local-environment identifiers |
 
-None is catastrophic; OpenClaw is retired and reads as a before/after case study. But these
-are facts that should be *disclosed by choice*, not published by tag.
+> [!NOTE]
+> **Redacted 2026-07-31.** This table originally spelled out *what* each page exposes. That
+> was self-defeating: this repository is public, so a document arguing these four pages must
+> not be published was itself publishing their contents in summary. The categories above are
+> the level of detail this file should carry — enough to justify the decision, not enough to
+> reproduce the disclosure. Found when the same descriptions were about to be copied into
+> CLAUDE.md (PR #45) and review caught it there.
+>
+> **This redaction is forward-looking only.** The original wording is in git history from
+> 2026-07-29 and remains readable there; removing it would require rewriting the history of
+> a public repository, which is a separate and much larger decision. Treat the underlying
+> facts as already disclosed and decide on that basis.
+
+None is catastrophic; OpenClaw is retired and reads as a before/after case study — it is in
+fact allowlisted in `src/public-allowlist.ts` and ships in the package, so only three of
+these four are actually withheld. But these are facts that should be *disclosed by choice*,
+not published by tag.
 
 **Usefulness audit — this is the binding constraint.** Of 190 pages, roughly 40 are generic
 tool stubs (Git, React, Next.js, Vite, Xcode, Swift, Sparkle, Homebrew, Blender, CapCut)

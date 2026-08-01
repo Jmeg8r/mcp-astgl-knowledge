@@ -85,8 +85,9 @@ vendor rather than carrying ASTGL-specific insight.
 
 ## Exclude — private projects & personal ventures (17)
 
-`Income Investor` states that monetization is gated on a Florida securities-attorney review,
-disclosing both business-legal status and state of residence.
+`Income Investor` carries unlaunched-product and business-status detail. (Redacted
+2026-07-31: this line previously spelled out what it discloses, which defeated the purpose
+in a public repository — see the note in ADR-0001's *Scope of what ships*.)
 
 `Income Investor` · `Dividend Portfolio Tracker` · `Social Media Scheduling App` ·
 `Geekspace` · `Geekspace MCP` · `revri` · `quorum` · `trevin-creator` · `Tars` ·
