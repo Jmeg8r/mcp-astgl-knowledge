@@ -1,8 +1,8 @@
 {
   "name": "mcp-astgl-knowledge",
   "mcpName": "io.github.Jmeg8r/astgl-knowledge",
-  "version": "1.3.0",
-  "description": "MCP server with 17 tools for searching, citing, exporting, and planning ASTGL content about MCP servers, local AI, and AI automation \u2014 includes tutorials, comparisons, idea journal, markdown export, dashboard analytics, and rate-limited API access",
+  "version": "1.3.1",
+  "description": "MCP server with 17 tools for searching, citing, exporting, and planning ASTGL content about MCP servers, local AI, and AI automation — includes tutorials, comparisons, idea journal, markdown export, dashboard analytics, and rate-limited API access",
   "type": "module",
   "bin": {
     "mcp-astgl-knowledge": "dist/index.js"
