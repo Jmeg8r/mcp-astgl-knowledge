@@ -1,3 +1,5 @@
+# Pull request
+
 ## What changed
 
 <!-- One or two sentences. The commit log has the detail. -->
@@ -8,7 +10,8 @@
 
 ## Local gates
 
-<!-- Filled automatically by bin/ship.sh — leave as-is if you ran it. -->
+<!-- Filled automatically by bin/ship.sh in repos that have it — otherwise
+     tick these by hand after running the commands. -->
 
 - [ ] `lefthook run pre-commit` clean
 - [ ] `lefthook run pre-push` clean

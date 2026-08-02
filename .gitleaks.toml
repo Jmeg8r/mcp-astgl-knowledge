@@ -53,13 +53,19 @@ tags = ["key", "anthropic"]
 [allowlist]
 description = "Known-safe paths and placeholder values"
 
+# Only paths that cannot meaningfully carry an authored secret, or that are
+# vendored rather than written here.
+#
+# dist/ and tests?/fixtures/ were removed deliberately. A global path exemption
+# in a secret scanner means a real credential under that path ships unscanned,
+# and fixture directories are one of the most common places a live key lands by
+# accident. Suppress individual false positives with a rule-scoped allowlist or
+# a `gitleaks:allow` fingerprint rather than exempting a whole tree.
 paths = [
   '''(.*?)(png|jpg|jpeg|gif|svg|webp|ico|pdf)$''',
   '''(.*?)\.lock$''',
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
-  '''(^|/)dist/''',
-  '''(^|/)tests?/fixtures/''',
 ]
 
 regexes = [
