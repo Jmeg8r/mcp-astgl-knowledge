@@ -1,6 +1,10 @@
 # .gitleaks.toml — ASTGL standard secret-scanning config.
-# This is the data-egress boundary. Nothing here should ever reach GitHub
-# or CodeRabbit's cloud.
+#
+# This file is detection RULES for gitleaks, nothing more. It is committed and
+# therefore reaches GitHub like any other tracked file. It is not a boundary
+# and it guarantees nothing: the lefthook jobs that use it run locally, can be
+# skipped (LEFTHOOK=0, --no-verify), and only catch patterns defined here.
+# Treat it as one layer, not as proof that no secret ever leaves the machine.
 
 title = "ASTGL secret scanning"
 
@@ -26,7 +30,13 @@ tags = ["credential", "powercli"]
 [[rules]]
 id = "powershell-plaintext-password"
 description = "Plaintext password variable in PowerShell"
-regex = '''(?i)\$(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"][^'"$][^'"]{5,}['"]'''
+# The value is captured (group 2) so allowlist regexes match the SECRET rather
+# than the whole assignment. The old pattern required 6+ characters and
+# excluded values starting with '$', so `$password = 'short'` and
+# `$token = '$literal'` both evaded it. ${VAR} and $env: references are
+# placeholders and stay covered by the allowlist regexes below.
+regex = '''(?i)\$(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"]([^'"]{3,})['"]'''
+secretGroup = 2
 tags = ["credential", "powershell"]
 
 [[rules]]
