@@ -61,9 +61,19 @@ pre-commit:
     lint-powershell:
       tags: lint
       glob: "*.{ps1,psm1,psd1}"
+      # $ErrorActionPreference = Stop is load-bearing: Invoke-ScriptAnalyzer
+      # raises a NON-terminating error when the module is missing, which left
+      # $r null, made the `if` false, and exited 0 — a gate that silently
+      # passes. That is the same failure this block was rewritten to fix, so
+      # it fails closed now: unavailable analyzer is a failure, not a pass.
       run: |
         for f in {staged_files}; do
           PSSA_PATH="$f" pwsh -NoProfile -Command '
+            $ErrorActionPreference = "Stop"
+            if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+              Write-Error "PSScriptAnalyzer not installed: Install-Module PSScriptAnalyzer -Scope CurrentUser"
+              exit 1
+            }
             $r = Invoke-ScriptAnalyzer -Path $env:PSSA_PATH -Severity Error,Warning
             if ($r) { $r | Format-Table -AutoSize; exit 1 }
           ' || exit 1
