@@ -1,0 +1,98 @@
+# .gitleaks.toml — ASTGL standard secret-scanning config.
+#
+# This file is detection RULES for gitleaks, nothing more. It is committed and
+# therefore reaches GitHub like any other tracked file. It is not a boundary
+# and it guarantees nothing: the lefthook jobs that use it run locally, can be
+# skipped (LEFTHOOK=0, --no-verify), and only catch patterns defined here.
+# Treat it as one layer, not as proof that no secret ever leaves the machine.
+
+title = "ASTGL secret scanning"
+
+[extend]
+useDefault = true   # inherit gitleaks' full built-in ruleset
+
+# ---------------------------------------------------------------------------
+# Additional rules for the things you actually handle
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "coderabbit-api-key"
+description = "CodeRabbit API key"
+regex = '''cr-[A-Za-z0-9_\-]{20,}'''
+tags = ["key", "coderabbit"]
+
+[[rules]]
+id = "vsphere-credential-literal"
+description = "Hardcoded vCenter/ESXi credential in PowerCLI"
+regex = '''(?i)(Connect-VIServer|Connect-CisServer)[^\n]{0,200}?-Password\s+['"][^'"]{4,}['"]'''
+tags = ["credential", "powercli"]
+
+[[rules]]
+id = "powershell-plaintext-password"
+description = "Plaintext password variable in PowerShell"
+# The value is captured (group 2) so allowlist regexes match the SECRET rather
+# than the whole assignment. The old pattern required 6+ characters and
+# excluded values starting with '$', so `$password = 'short'` and
+# `$token = '$literal'` both evaded it. ${VAR} and $env: references are
+# placeholders and stay covered by the allowlist regexes below.
+# `(?:script:|global:|local:|private:|env:)?` covers scoped variables
+# ($script:password, $global:token) which the unscoped pattern missed
+# entirely. `[^'"\r\n]` keeps a match on a single line — without the newline
+# exclusion the value could span lines and swallow unrelated content.
+regex = '''(?i)\$(?:script:|global:|local:|private:|env:)?(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"]([^'"\r\n]{3,})['"]'''
+secretGroup = 2
+tags = ["credential", "powershell"]
+
+[[rules]]
+id = "internal-hostname"
+description = "Internal hostname or FQDN leaking into code"
+regex = '''(?i)\b[a-z0-9\-]+\.(ufl|shands|ufhealth)\.(edu|org)\b'''
+tags = ["pii", "internal"]
+
+[[rules]]
+id = "tailscale-authkey"
+description = "Tailscale auth key"
+regex = '''tskey-(auth|api|client)-[A-Za-z0-9\-]{10,}'''
+tags = ["key", "tailscale"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9\-_]{20,}'''
+tags = ["key", "anthropic"]
+
+# ---------------------------------------------------------------------------
+# Allowlist — reduce false positives without punching holes
+# ---------------------------------------------------------------------------
+[allowlist]
+description = "Known-safe paths and placeholder values"
+
+# Only paths that cannot meaningfully carry an authored secret, or that are
+# vendored rather than written here.
+#
+# dist/ and tests?/fixtures/ were removed deliberately. A global path exemption
+# in a secret scanner means a real credential under that path ships unscanned,
+# and fixture directories are one of the most common places a live key lands by
+# accident. Suppress individual false positives with a rule-scoped allowlist or
+# a `gitleaks:allow` fingerprint rather than exempting a whole tree.
+paths = [
+  # Raster/binary image formats only, and anchored on a literal dot — the old
+  # pattern had no `\.`, so any filename merely ENDING in those letters was
+  # exempt. svg and pdf are gone: both are text-bearing (svg is executable
+  # markup) and a credential in either is readable, not noise.
+  '''\.(png|jpg|jpeg|gif|webp|ico)$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+]
+# `.lock` is deliberately NOT exempt. Lockfiles routinely carry registry URLs
+# with embedded tokens, which is exactly the kind of credential that reaches a
+# public repo unnoticed. Use a `gitleaks:allow` fingerprint for a specific
+# false positive instead of exempting the whole file type.
+
+regexes = [
+  '''(?i)(example|sample|placeholder|dummy|redacted|changeme|your[_-]?key[_-]?here)''',
+  '''(?i)xxxx+''',
+  '''<[A-Z_]{3,}>''',            # <API_KEY> style placeholders in docs
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',  # ${ENV_VAR} references
+  '''\$env:[A-Za-z_][A-Za-z0-9_]*''',  # PowerShell env var references
+]

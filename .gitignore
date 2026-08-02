@@ -41,3 +41,7 @@ build/
 # The bundle is a distributable artifact, not source; never commit it.
 dist-mcpb/
 .mcpb-stage/
+.coderabbit.local.yaml
+.lefthook-local.yml
+.cr-cache/
+*.cr-review.md
