@@ -76,11 +76,18 @@ description = "Known-safe paths and placeholder values"
 # accident. Suppress individual false positives with a rule-scoped allowlist or
 # a `gitleaks:allow` fingerprint rather than exempting a whole tree.
 paths = [
-  '''(.*?)(png|jpg|jpeg|gif|svg|webp|ico|pdf)$''',
-  '''(.*?)\.lock$''',
+  # Raster/binary image formats only, and anchored on a literal dot — the old
+  # pattern had no `\.`, so any filename merely ENDING in those letters was
+  # exempt. svg and pdf are gone: both are text-bearing (svg is executable
+  # markup) and a credential in either is readable, not noise.
+  '''\.(png|jpg|jpeg|gif|webp|ico)$''',
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
 ]
+# `.lock` is deliberately NOT exempt. Lockfiles routinely carry registry URLs
+# with embedded tokens, which is exactly the kind of credential that reaches a
+# public repo unnoticed. Use a `gitleaks:allow` fingerprint for a specific
+# false positive instead of exempting the whole file type.
 
 regexes = [
   '''(?i)(example|sample|placeholder|dummy|redacted|changeme|your[_-]?key[_-]?here)''',

@@ -157,7 +157,7 @@ commit-msg:
       # cannot be rewritten to conventional form, so they are allowed through.
       run: |
         SUBJECT=$(head -n1 "{1}")
-        printf '%s\n' "$SUBJECT" | grep -qE '^((feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: *[^[:space:]].{2,}|(Merge|Revert) )' || {
+        printf '%s\n' "$SUBJECT" | grep -qE '^((feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: [^[:space:]].{2,}|(Merge|Revert) )' || {
           echo "✗ Commit subject must be conventional, e.g.:"
           echo "    feat(parser): support nested includes"
           echo "    fix(auth): handle expired refresh token"
