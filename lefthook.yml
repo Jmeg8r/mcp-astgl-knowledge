@@ -134,17 +134,89 @@ pre-commit:
       run: cr config validate
 
     # Fail fast on accidentally committed large files.
+    #
+    # WHY this job enumerates the index itself instead of taking {staged_files}:
+    # lefthook filters that list to paths present in the WORKING TREE, so
+    # `git add big.bin` followed by `rm big.bin` sent the blob into the commit
+    # unchecked. Measured: git reports the path, lefthook passes an empty list
+    # and then skips the job outright -- the log line is literally
+    # "no-big-files (skip) no files for inspection". The gate does not pass,
+    # it never runs, which is why this is a path-source fix and not a
+    # measurement fix: no care inside the loop can see a file the loop is
+    # never given.
+    #
+    # `git diff --cached --raw` is the source because one record carries
+    # everything needed: the entry exists regardless of the working tree, the
+    # destination blob sha is right there, the mode identifies submodules, and
+    # the path follows a TAB (git C-quotes anything with a newline, so one
+    # record stays on one line). Not a whitespace fix — lefthook does quote
+    # {staged_files} correctly, verified — but it does drop the dependency on
+    # that quoting, the same way reading the index drops the dependency on
+    # lefthook's stashing below.
+    #
+    # WHY the size comes from the staged blob and not the working tree: for
+    # ordinary file shapes they differ, and `wc -c` measured the wrong one.
+    #   - symlink: `wc -c` follows it and reports the TARGET's size, while the
+    #     blob is just the link path
+    #   - clean filter (git-lfs): the working tree holds the whole asset, the
+    #     blob is a small pointer
+    # The old check blocked both — advising you to "use LFS" about a file
+    # already stored in LFS. Note it did NOT leak a blob on a stage-then-shrink,
+    # contrary to the reasoning in astgl-articles PR 44: lefthook hides
+    # partially staged files, so the working tree already matched the staged
+    # content and the old check blocked there too.
+    #
+    # The gitlink skip is required now that the index is the source: a submodule
+    # is mode 160000 and points at a commit in the SUBMODULE's object store,
+    # which this repo does not have, so `git cat-file` fails on it. Taking the
+    # mode from the same --raw record makes the check free; a per-file
+    # `git ls-files -s` probe doubled the loop (5.6s -> 10.6s over 200 files).
+    #
+    # The filter is ACMRT, not ACMR. A type change counts: if HEAD has a
+    # symlink at a path and the index now has a 6MB regular file there, the
+    # status is T and ACMR enumerates NOTHING -- verified, the blob went
+    # straight through. D is excluded because a deletion stages no blob, and
+    # U because an unmerged entry has no single destination sha and would
+    # abort the hook mid conflict-resolution.
+    #
+    # `set -eu` is the fail-closed backstop: an unreadable entry aborts the hook
+    # and REFUSES the commit rather than skipping the file. Two shapes here are
+    # deliberate — the loop is fed by REDIRECTION, not a pipe, so `exit 1` exits
+    # the hook instead of a subshell; and the gitlink test is an `if`, not
+    # `&& continue`, because a failing `&&` list would itself trip errexit.
     no-big-files:
       tags: hygiene
       run: |
-        for f in {staged_files}; do
-          [ -f "$f" ] || continue
-          size=$(wc -c < "$f")
+        set -eu
+        TAB=$(printf '\t')
+        staged=$(mktemp)
+        trap 'rm -f "$staged"' EXIT
+        git diff --cached --raw --diff-filter=ACMRT > "$staged"
+        while IFS= read -r rec; do
+          # :<srcmode> <dstmode> <srcsha> <dstsha> <status><TAB><path>
+          r=${rec#:}
+          r=${r#* }
+          dstmode=${r%% *}; r=${r#* }
+          r=${r#* }
+          dstsha=${r%% *}; r=${r#* }
+          path=${r##*"$TAB"}
+          if [ "$dstmode" = 160000 ]; then
+            continue
+          fi
+          # An all-zero destination sha has no object to size. Only status D
+          # produces one and D is already filtered out, so this is defensive:
+          # if some git version emits one, cat-file would fail and set -e would
+          # refuse the commit. Costs one string comparison, no subprocess.
+          case "$dstsha" in
+            *[!0]*) ;;
+            *) continue ;;
+          esac
+          size=$(git cat-file -s "$dstsha")
           if [ "$size" -gt 5242880 ]; then
-            echo "✗ $f is $((size/1048576))MB — use LFS or add to .gitignore"
+            echo "✗ $path is $((size/1048576))MB — use LFS or add to .gitignore"
             exit 1
           fi
-        done
+        done < "$staged"
 
 # ---------------------------------------------------------------------------
 commit-msg:
