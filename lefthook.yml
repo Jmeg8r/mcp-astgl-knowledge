@@ -179,6 +179,12 @@ pre-commit:
     # U because an unmerged entry has no single destination sha and would
     # abort the hook mid conflict-resolution.
     #
+    # The rejection message prints exact bytes, not a rounded unit. 1048576 is
+    # a MiB, and the old `$((size/1048576))MB` both mislabelled it and truncated:
+    # a blob one byte over the limit reported "is 5MB" against a 5MB limit,
+    # reading as though it were AT the limit rather than over it. The threshold
+    # lives in LIMIT so the comparison and the message cannot drift apart.
+    #
     # `set -eu` is the fail-closed backstop: an unreadable entry aborts the hook
     # and REFUSES the commit rather than skipping the file. Two shapes here are
     # deliberate — the loop is fed by REDIRECTION, not a pipe, so `exit 1` exits
@@ -188,6 +194,7 @@ pre-commit:
       tags: hygiene
       run: |
         set -eu
+        LIMIT=5242880
         TAB=$(printf '\t')
         staged=$(mktemp)
         trap 'rm -f "$staged"' EXIT
@@ -212,8 +219,9 @@ pre-commit:
             *) continue ;;
           esac
           size=$(git cat-file -s "$dstsha")
-          if [ "$size" -gt 5242880 ]; then
-            echo "✗ $path is $((size/1048576))MB — use LFS or add to .gitignore"
+          if [ "$size" -gt "$LIMIT" ]; then
+            printf '✗ %s is %s bytes, over the %s byte limit — use LFS or add to .gitignore\n' \
+              "$path" "$size" "$LIMIT"
             exit 1
           fi
         done < "$staged"
