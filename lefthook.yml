@@ -39,7 +39,7 @@ pre-commit:
     # that were not the ones committed, and `no-big-files` measured a blob that
     # was not the one committed either — a reformat changes whitespace and line
     # breaks, so a file sitting just under the limit can cross it on the way in.
-    # Unlikely at a 5 MB threshold, but "unlikely" is not "cannot", and a gate
+    # Unlikely at a 5 MiB threshold, but "unlikely" is not "cannot", and a gate
     # whose correctness rests on an unstated size assumption is not a gate. A
     # gate that inspects the wrong artifact is the defect this whole file exists
     # to avoid.
