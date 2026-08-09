@@ -243,6 +243,27 @@ if [ "$SUT_RC" -eq 0 ] && grep -qE "inspected 1 file\(s\), [1-9][0-9]* bytes rea
   ok "a clean .svg is read, with non-zero bytes reported"
 else bad "clean svg not actually inspected (rc=$SUT_RC)" "$SUT_OUT"; fi
 
+# 5e. A legacy-Office file is REPORTED, not invisible. .doc is skipped by
+#     gitleaks' built-in path allowlist, so if it is also in no bucket here it
+#     vanishes: the primary scan never reads it and this script says "no binary
+#     or document files staged". The svg double-miss, measured again for OLE.
+new_repo c5e
+for _e in doc xls suo wsuo v2 vsidx; do
+  printf 'key = %s\n' "$SECRET" > "memo.$_e"
+done
+git add memo.*; run_sut
+# One staged set, one run, one JOINED assertion per extension (the filename must
+# appear WITHIN the NOT INSPECTED record -- -A8 spans the six-line list), so no
+# extension can quietly fall back into the invisible gap this case closed, and
+# a name landing in UNKNOWN instead cannot masquerade as covered.
+_5e_bad=""
+for _e in doc xls suo wsuo v2 vsidx; do
+  grep -A8 "NOT INSPECTED" <<<"$SUT_OUT" | grep -qF "memo.$_e" || _5e_bad="$_5e_bad memo.$_e"
+done
+if [ "$SUT_RC" -eq 0 ] && [ -z "$_5e_bad" ]; then
+  ok "all six built-in-skipped formats are reported NOT INSPECTED (doc xls suo wsuo v2 vsidx)"
+else bad "vanished or wrong bucket:${_5e_bad} (rc=$SUT_RC)" "$SUT_OUT"; fi
+
 # 6. Opaque formats are reported as NOT INSPECTED but do not block.
 new_repo c6
 printf '\x89PNG\r\n\x1a\n binary junk' > shot.png
@@ -296,17 +317,15 @@ chmod +x "$WORK/stub/gitleaks"
 set +e
 STUB_OUT="$(PATH="$WORK/stub:$PATH" "$SUT" 2>&1)"; STUB_RC=$?
 set -e
-# Assert the CAUSE, not just the word UNKNOWN.
-#
-# "UNKNOWN" alone is emitted by several unrelated paths -- notably a missing
-# pdftotext -- so matching it proved only that something went wrong, not that the
-# version canary was what caught it. The precondition check above now rules out
-# the pdftotext case, and this asserts the specific reason string so the two can
-# never be confused again even if that check is later relaxed.
-# shellcheck disable=SC2016  # single quotes are deliberate: the backticks are literal
-if [ "$STUB_RC" -ne 0 ] && grep -q 'no working `stdin` scan' <<<"$STUB_OUT"; then
-  ok "unsupported gitleaks on PATH fails closed as UNKNOWN (named the version canary)"
-else bad "unsupported gitleaks did not fail closed via the version canary (rc=$STUB_RC)" "$STUB_OUT"; fi
+# Assert the CAUSE, not just the word UNKNOWN -- and the cause moved. The
+# version PRE-FLIGHT (guard in assertion-only mode) now rejects an unsupported
+# binary before any scan runs, which is strictly earlier and better-attributed
+# than the stdin canary that used to catch this. The canary remains as
+# defence-in-depth for the case the guard cannot see: a binary that PASSES the
+# version floor but whose subcommands still misbehave.
+if [ "$STUB_RC" -ne 0 ] && grep -qF 'fails the version guard' <<<"$STUB_OUT"; then
+  ok "unsupported gitleaks on PATH is refused by the version pre-flight"
+else bad "unsupported gitleaks was not refused up front (rc=$STUB_RC)" "$STUB_OUT"; fi
 
 echo
 echo "  $pass passed, $fail failed"
