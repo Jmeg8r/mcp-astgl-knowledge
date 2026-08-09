@@ -389,9 +389,9 @@ pre-push:
           if [ -n "$BASE" ]; then RANGE="$BASE..HEAD"; else RANGE=""; fi
         fi
         if [ -n "$RANGE" ]; then
-          gitleaks git --no-banner --redact --log-opts="$RANGE"
+          ./scripts/gitleaks-guard.sh git --no-banner --redact --log-opts="$RANGE"
         else
-          gitleaks git --no-banner --redact
+          ./scripts/gitleaks-guard.sh git --no-banner --redact
         fi
 
     workflows:
@@ -406,9 +406,17 @@ pre-push:
     selftest-binary-scan:
       tags: security
       run: |
-        if [ -x scripts/selftest-binary-scan.sh ]; then
-          scripts/selftest-binary-scan.sh
+        # NOT `[ -x ]`. A guard that skips when the file is missing or lost its
+        # execute bit turns "the binary gate is unverified" into a silent pass —
+        # the same fail-open this self-test exists to detect. The neighbouring
+        # secret-scan-selftest runs its script unconditionally; match it.
+        # `bash <script>` rather than `./<script>` so a dropped execute bit is
+        # not itself a failure mode.
+        if [ ! -f scripts/selftest-binary-scan.sh ]; then
+          echo "✗ scripts/selftest-binary-scan.sh is missing — the binary gate is unverified"
+          exit 1
         fi
+        bash scripts/selftest-binary-scan.sh
 
 # ---------------------------------------------------------------------------
 # Metered CodeRabbit review — NOT wired to a git hook on purpose.
