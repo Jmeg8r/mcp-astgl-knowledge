@@ -38,6 +38,33 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+# No cd. Every path this script touches is either absolute ($TMPDIR_SCAN,
+# $CONFIG, the probe copies) or resolved by git itself: `git diff --cached`
+# prints root-relative names from any cwd, and `git cat-file blob ":<path>"`
+# is ROOT-relative by definition (`:./<path>` is the cwd-relative form --
+# measured from a nested subdirectory during this rollout). An advisory
+# `cd || true` briefly lived here and earned a review finding for swallowing
+# its own failure; the correct amount of cd is none.
+
+# Version pre-flight, in the guard's ASSERTION-ONLY mode (no arguments). The
+# canaries below prove BEHAVIOUR -- stdin and archive traversal work -- but not
+# the floor: a supported-but-below-floor gitleaks passes them and then scans
+# with different allowlist semantics than .gitleaks.toml documents. This is a
+# separate pre-flight rather than routing the scan calls through the guard,
+# because the canaries read exit 1 as "toolchain works" and the guard also
+# exits 1 on rejection -- wrapping would turn a version failure into a false OK
+# (recorded at length in gitleaks-version.env).
+# Resolved against THIS SCRIPT's directory, not REPO_ROOT: the guard ships next
+# to the scanner wherever the scanner is (the self-test runs it from fixture
+# repos that have no scripts/ tree -- resolving by repo root failed 13 of 14
+# suite cases the first time, which is itself the lesson: probe the resolver
+# from somewhere other than the happy path).
+_SELF_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+if ! "$_SELF_DIR/gitleaks-guard.sh" >/dev/null 2>&1; then
+  echo "  ✗ gitleaks on PATH fails the version guard — refusing to scan binaries with it"
+  echo "      Run scripts/gitleaks-guard.sh for the specific reason."
+  exit 1
+fi
 CONFIG="$REPO_ROOT/.gitleaks.toml"
 
 # Archive-shaped documents. gitleaks can read inside these once the path
@@ -53,7 +80,16 @@ PDF_EXTS=(pdf)
 # and deliberately NOT blocking -- a credential in a screenshot is invisible to
 # a text scanner either way, so blocking here buys noise, not coverage.
 # shellcheck disable=SC2034  # read indirectly by in_list; see its definition
-OPAQUE_EXTS=(png jpg jpeg gif webp ico bmp tif tiff avif heic
+# doc/xls/suo/wsuo/v2/vsidx are here for a sharper reason than the images: the
+# BUILT-IN allowlist path-skips them (measured on 8.30.1 -- a canary in probe.doc
+# is invisible to the primary scan), and until this line they were in no bucket
+# here either, so they fell through the "anything else is text" comment while
+# provably uncovered. The svg double-miss, in legacy-Office form. OLE compound
+# files have no extractor in this stack yet, so they are REPORTED rather than
+# read; ppt/dot/xlt/pot/vsd were probed too and are NOT built-in-skipped, so
+# they stay with the primary scan.
+OPAQUE_EXTS=(doc xls suo wsuo v2 vsidx
+             png jpg jpeg gif webp ico bmp tif tiff avif heic
              mp3 mp4 mov avi mkv wav aiff flac
              exe dll so dylib bin dmg pkg iso
              woff woff2 ttf otf eot
