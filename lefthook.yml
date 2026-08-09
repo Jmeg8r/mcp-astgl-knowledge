@@ -58,7 +58,20 @@ pre-commit:
     format-python:
       tags: format
       glob: "*.py"
-      run: ruff format --check {staged_files} || true
+      run: |
+        rc=0
+        ruff format --check {staged_files} || rc=$?
+        # 0 clean, 1 would-reformat. Advisory covers the SECOND one only.
+        # Anything else is ruff failing rather than a formatting difference:
+        # 2 = bad config or internal error, 127 = not installed. `|| true`
+        # swallowed all four identically, so a broken or absent formatter
+        # reported as a clean pass — the failure mode this whole file exists to
+        # avoid. Before this job went advisory it had no `|| true` at all and
+        # those DID block; that behaviour is restored here deliberately.
+        if [ "$rc" -gt 1 ]; then
+          echo "✗ ruff format exited $rc — the formatter itself failed; this is not a formatting difference"
+          exit "$rc"
+        fi
 
     # ADVISORY, by deliberate choice — reports but does not block.
     #
