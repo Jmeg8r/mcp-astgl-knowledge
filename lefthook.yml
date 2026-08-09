@@ -149,9 +149,39 @@ pre-commit:
 
     # The single most important hook in this file. Secrets must never reach
     # GitHub *or* CodeRabbit's cloud. This is your data-egress boundary.
+    #
+    # Routed through scripts/gitleaks-guard.sh rather than calling gitleaks directly.
+    # WHY: a bare `gitleaks` runs whatever binary is on PATH, and allowlist semantics
+    # differ across versions — local runs used 8.30.1 while a CodeRabbit review sandbox
+    # on PR #5 reported 1.7.3. A scanner whose version you cannot name is a scanner
+    # whose coverage you cannot state. The guard asserts a floor and then execs
+    # gitleaks; the version lives in scripts/gitleaks-version.env.
+    #
+    # `git --staged` rather than the old `protect --staged`: `protect` is a deprecated
+    # alias, already absent from `gitleaks --help` in 8.30.1 and on its way out. Both
+    # forms were checked against the same staged fixture and produce identical results
+    # (scripts/test-gitleaks-guard.sh asserts the `git --staged` path specifically).
     secrets:
       tags: security
-      run: gitleaks protect --staged --redact --no-banner --verbose
+      run: ./scripts/gitleaks-guard.sh git --staged --redact --no-banner --verbose
+
+    # Second pass for what the gate above provably cannot see.
+    #
+    # WHY this is a separate step and not a config tweak: gitleaks' built-in
+    # allowlist -- inherited by .gitleaks.toml via `[extend] useDefault = true`
+    # -- skips pdf/xlsx/docx/bin/exe BY PATH, so `secrets` prints "no leaks
+    # found" after reading ~0 bytes of them. Verified 2026-08-08 on gitleaks
+    # 8.30.1. You cannot fix that in .gitleaks.toml: the exclusion is upstream,
+    # and dropping useDefault to escape it would discard the entire built-in
+    # ruleset -- a far worse trade. The script sidesteps it by changing the PATH
+    # gitleaks sees (a *.zip temp name, or extracted text via stdin), which keeps
+    # .gitleaks.toml as the single source of truth with every built-in rule live.
+    #
+    # It reports N-scanned and fails closed: a file it should have been able to
+    # read but could not comes back UNKNOWN, never clean.
+    secrets-binaries:
+      tags: security
+      run: scripts/scan-staged-binaries.sh
 
     # Aikido secret scanner.
     #
@@ -324,6 +354,17 @@ pre-push:
           mypy . || true   # advisory until the codebase is fully annotated
         fi
 
+    # Prove the scanner still behaves the way .gitleaks.toml says it does.
+    #
+    # WHY this runs BEFORE secrets-history: the history scan's verdict is only worth
+    # what the scanner's coverage is worth. A version floor rules out the catastrophic
+    # old-binary case but says nothing about semantic drift above the floor, so the
+    # coverage claims are asserted directly. Costs ~1s; runs on this machine on purpose,
+    # because the installed binary is a property of this machine and CI cannot check it.
+    secret-scan-selftest:
+      tags: security
+      run: ./scripts/test-gitleaks-guard.sh
+
     # Scan the commits actually being pushed.
     #
     # WHY the range is computed rather than hardcoded to @{push}: that revision
@@ -358,6 +399,15 @@ pre-push:
       run: |
         if [ -d .github/workflows ]; then
           actionlint
+        fi
+
+    # The binary secret gate is itself testable, so test it. A scanner nobody
+    # verifies is how the original hole survived review in the first place.
+    selftest-binary-scan:
+      tags: security
+      run: |
+        if [ -x scripts/selftest-binary-scan.sh ]; then
+          scripts/selftest-binary-scan.sh
         fi
 
 # ---------------------------------------------------------------------------
