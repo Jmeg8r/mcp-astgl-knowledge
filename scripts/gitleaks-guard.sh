@@ -74,7 +74,11 @@ found=$(printf '%s' "$raw_version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n
 if [ "$(printf '1.10.0\n1.9.0\n' | sort -V 2>/dev/null | head -n1)" != "1.9.0" ]; then
   die "this system's \`sort\` cannot order versions (-V absent or ignored).
     Refusing to guess whether gitleaks meets the ${GITLEAKS_MIN_VERSION} floor.
-    Install GNU coreutils, or run the scan on a system whose sort supports -V."
+    On macOS, Homebrew coreutils installs GNU sort as \`gsort\` WITHOUT shadowing
+    \`sort\`, so installing it alone does not change what this guard invokes:
+    also put \$(brew --prefix coreutils)/libexec/gnubin on PATH, or run the scan
+    on a system whose sort supports -V. (Not yet observed on any fleet machine --
+    macOS's own BSD sort passes the ordering probe above.)"
 fi
 
 # sort -V puts the lower version first. If the floor sorts first, we are at or above it.

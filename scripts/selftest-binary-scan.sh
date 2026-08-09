@@ -248,14 +248,21 @@ else bad "clean svg not actually inspected (rc=$SUT_RC)" "$SUT_OUT"; fi
 #     vanishes: the primary scan never reads it and this script says "no binary
 #     or document files staged". The svg double-miss, measured again for OLE.
 new_repo c5e
-printf 'key = %s\n' "$SECRET" > memo.doc
-git add memo.doc; run_sut
-# One joined assertion, not two independent greps: separately, this would pass
-# if memo.doc appeared as UNKNOWN while a DIFFERENT file was the NOT INSPECTED
-# one. The filename must appear WITHIN the NOT INSPECTED section.
-if [ "$SUT_RC" -eq 0 ] && grep -A5 "NOT INSPECTED" <<<"$SUT_OUT" | grep -qF 'memo.doc'; then
-  ok "a .doc is reported NOT INSPECTED, not silently ignored"
-else bad "a .doc vanished from the scan or landed in the wrong bucket (rc=$SUT_RC)" "$SUT_OUT"; fi
+for _e in doc xls suo wsuo v2 vsidx; do
+  printf 'key = %s\n' "$SECRET" > "memo.$_e"
+done
+git add memo.*; run_sut
+# One staged set, one run, one JOINED assertion per extension (the filename must
+# appear WITHIN the NOT INSPECTED record -- -A8 spans the six-line list), so no
+# extension can quietly fall back into the invisible gap this case closed, and
+# a name landing in UNKNOWN instead cannot masquerade as covered.
+_5e_bad=""
+for _e in doc xls suo wsuo v2 vsidx; do
+  grep -A8 "NOT INSPECTED" <<<"$SUT_OUT" | grep -qF "memo.$_e" || _5e_bad="$_5e_bad memo.$_e"
+done
+if [ "$SUT_RC" -eq 0 ] && [ -z "$_5e_bad" ]; then
+  ok "all six built-in-skipped formats are reported NOT INSPECTED (doc xls suo wsuo v2 vsidx)"
+else bad "vanished or wrong bucket:${_5e_bad} (rc=$SUT_RC)" "$SUT_OUT"; fi
 
 # 6. Opaque formats are reported as NOT INSPECTED but do not block.
 new_repo c6
