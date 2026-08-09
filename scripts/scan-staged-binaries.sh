@@ -340,7 +340,13 @@ while IFS= read -r -d '' path; do
         unknown+=("$path (archive probe scanned clean: .gitleaks.toml no longer carries the rule the canary matches — fix the config, not the scanner)")
         continue ;;
     esac
-    git cat-file blob ":$path" > "$staged"
+    git cat-file blob ":$path" > "$staged" || {
+      # Without this the failure is a bare git diagnostic under set -e, naming
+      # neither this script nor the file it could not read -- and an unreadable
+      # staged blob is UNKNOWN, not clean.
+      unknown+=("$path (could not read the staged blob)")
+      continue
+    }
     run_gitleaks_archive "$path" "$staged"
   elif in_list "$ext" PDF_EXTS; then
     if ! command -v pdftotext >/dev/null 2>&1; then
@@ -354,7 +360,13 @@ while IFS= read -r -d '' path; do
       unknown+=("$path (gitleaks on PATH has no working \`stdin\` scan — needs 8.x)")
       continue
     fi
-    git cat-file blob ":$path" > "$staged"
+    git cat-file blob ":$path" > "$staged" || {
+      # Without this the failure is a bare git diagnostic under set -e, naming
+      # neither this script nor the file it could not read -- and an unreadable
+      # staged blob is UNKNOWN, not clean.
+      unknown+=("$path (could not read the staged blob)")
+      continue
+    }
     text="$TMPDIR_SCAN/extracted.txt"
     if ! pdftotext -q "$staged" "$text" 2>/dev/null; then
       unknown+=("$path (pdftotext could not parse it)")
@@ -377,7 +389,13 @@ while IFS= read -r -d '' path; do
       unknown+=("$path (gitleaks on PATH has no working \`stdin\` scan — needs 8.x)")
       continue
     fi
-    git cat-file blob ":$path" > "$staged"
+    git cat-file blob ":$path" > "$staged" || {
+      # Without this the failure is a bare git diagnostic under set -e, naming
+      # neither this script nor the file it could not read -- and an unreadable
+      # staged blob is UNKNOWN, not clean.
+      unknown+=("$path (could not read the staged blob)")
+      continue
+    }
     run_gitleaks_stdin "$path" "$staged"
   elif in_list "$ext" OPAQUE_EXTS; then
     opaque+=("$path")

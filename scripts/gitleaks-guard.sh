@@ -57,6 +57,26 @@ found=$(printf '%s' "$raw_version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n
     \`gitleaks version\` printed: ${raw_version:-<nothing>}
     Refusing to scan with an unidentified binary."
 
+# `sort -V` is the comparison, so its ABSENCE has to be a named failure rather than
+# a shell diagnostic. Without this probe an unusable -V made the pipeline fail under
+# errexit and the guard died printing `sort: illegal option -- V` and exiting 2 --
+# naming neither this script nor what it was comparing, which is precisely the
+# anonymous failure die() exists to replace. Verified with a sort shim rejecting -V.
+# (It works on macOS's BSD sort and on GNU sort; this guards the minimal-userland
+# case, and costs one comparison per run.)
+# The pair matters. `1.0.0 / 1.0.1` sorts identically whether -V is honoured or
+# silently ignored, so accepting the OPTION would have been mistaken for having
+# the BEHAVIOUR. `1.9.0 / 1.10.0` is the smallest pair where the two disagree:
+# lexicographic puts 1.10.0 first, version-aware puts 1.9.0 first. That distinction
+# is the whole floor check -- with a lexicographic fallback, floor 8.30.1 sorts
+# before a found 8.9.0, so a BELOW-floor gitleaks would read as ACCEPT. Fail open,
+# in the guard whose entire job is to fail closed.
+if [ "$(printf '1.10.0\n1.9.0\n' | sort -V 2>/dev/null | head -n1)" != "1.9.0" ]; then
+  die "this system's \`sort\` cannot order versions (-V absent or ignored).
+    Refusing to guess whether gitleaks meets the ${GITLEAKS_MIN_VERSION} floor.
+    Install GNU coreutils, or run the scan on a system whose sort supports -V."
+fi
+
 # sort -V puts the lower version first. If the floor sorts first, we are at or above it.
 lowest=$(printf '%s\n%s\n' "$GITLEAKS_MIN_VERSION" "$found" | sort -V | head -n1)
 [ "$lowest" = "$GITLEAKS_MIN_VERSION" ] || die "gitleaks $found is older than the required $GITLEAKS_MIN_VERSION.

@@ -20,7 +20,12 @@ tags = ["key", "coderabbit"]
 [[rules]]
 id = "vsphere-credential-literal"
 description = "Hardcoded vCenter/ESXi credential in PowerCLI"
-regex = '''(?i)(Connect-VIServer|Connect-CisServer)[^\n]{0,200}?-Password\s+['"][^'"]{4,}['"]'''
+# Same defect, different cause: this rule had NO capture group, so the whole
+# match was the reported secret and `--redact` masked the entire line including
+# the cmdlet -- while the password travelled inside it. secretGroup isolates the
+# credential.
+regex = '''(?i)(?:Connect-VIServer|Connect-CisServer)[^\n]{0,200}?-Password\s+['"]([^'"]{4,})['"]'''
+secretGroup = 1
 tags = ["credential", "powercli"]
 
 [[rules]]
@@ -34,7 +39,13 @@ description = "Plaintext password variable in PowerShell"
 # already covered by the `\$env:` allowlist regex below.
 # The {5,} after the first character means a 6-character minimum, which is what
 # keeps "abc" and other obvious placeholders out.
-regex = '''(?i)\$(?:(?:script|global|local|private|env|using):)?(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"][^'"$][^'"]{5,}['"]'''
+# secretGroup points at the VALUE. Without it the only capture group was the
+# variable NAME, so `--redact` masked "password" and printed the credential:
+#   Secret: REDACTED      Match: $REDACTED = "SuperSecretValue123"
+# Inverted redaction, in the output the pre-commit gate prints to a terminal and
+# CI writes to a log. Verified before and after.
+regex = '''(?i)\$(?:(?:script|global|local|private|env|using):)?(?:password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"]([^'"$][^'"]{5,})['"]'''
+secretGroup = 1
 tags = ["credential", "powershell"]
 
 [[rules]]
@@ -163,9 +174,13 @@ paths = [
   # closed by scripts/scan-staged-binaries.sh, which routes svg through
   # `gitleaks stdin` (TEXT_SKIPPED_EXTS), asserted by selftest-binary-scan.sh.
   '''(?i)\.(png|jpg|jpeg|gif|webp|ico)$''',
-  # Lockfiles: hashes and integrity strings are high-entropy by construction and
-  # generate constant false positives; they carry no author-written credentials.
-  '''(.*?)\.lock$''',
+  # NO .lock EXCLUSION -- removed 2026-08-09 after measuring, same as dist/ before it.
+  # The rationale was "lockfile hashes are high-entropy and generate constant false
+  # positives". Measured across 8 fleet repos: removing it changes NOTHING (0->0 on
+  # six, 14->14 on astgl-store, 2->2 on studydeck). It suppressed no noise, while a
+  # `.lock` glob is wide -- it matches any path ending in .lock, not just package
+  # lockfiles, so a `credentials.lock` or `secrets.lock` would have been exempt.
+  # Reinstate per-repo if a real lockfile ever does generate noise.
   # Vendored dependency trees. Not ours to fix, and enormous.
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
@@ -190,5 +205,9 @@ regexes = [
   '''(?i)xxxx+''',
   '''<[A-Z_]{3,}>''',            # <API_KEY> style placeholders in docs
   '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',  # ${ENV_VAR} references
-  '''(?i)\$env:[A-Za-z_][A-Za-z0-9_]*''',  # PowerShell env var references
+  # ANCHORED. Unanchored, this matched any secret merely CONTAINING $env:NAME
+  # anywhere in it, which is a far wider exemption than "this value is an env var
+  # reference". Measured: anchoring changes no finding across 8 fleet repos, so the
+  # narrowing costs nothing. A reference is the WHOLE value or it is not a reference.
+  '''(?i)^\$env:[A-Za-z_][A-Za-z0-9_]*$''',  # PowerShell env var references
 ]

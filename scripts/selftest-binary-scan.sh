@@ -45,14 +45,29 @@ SECRET="cr-""0123456789abcdefghijklmnop"
 #                then goes green while proving nothing about the version canary
 #                they exist to check. This is the dangerous one: silent, and it
 #                looks identical to success.
-# Skipping loudly beats passing falsely.
+# A missing tool is a FAILURE, not a skip. This exited 0 under the banner
+# "skipping loudly beats passing falsely" -- but the loudness was only in the
+# message. lefthook reads the exit code, so `selftest-binary-scan` went GREEN on
+# a machine that could not run the cases, and a green self-test is exactly the
+# claim "the binary gate is verified". Verified on a PATH without pdftotext:
+# it printed the SKIP line and exited 0.
+#
+# Exit 1 instead. If a machine genuinely cannot run this, that is a fact about
+# the gate's coverage there and should be visible, not absorbed.
+# All three are checked before exiting, so a machine missing two tools learns
+# about both in one run instead of one per attempt.
+_missing=0
 for tool in gitleaks python3 pdftotext; do
   command -v "$tool" >/dev/null 2>&1 || {
-    echo "SKIP: $tool not installed — this suite cannot distinguish pass from no-op without it"
-    [ "$tool" = pdftotext ] && echo "      (brew install poppler)"
-    exit 0
+    printf '\n✗ %s is not installed — this suite cannot distinguish pass from no-op without it.\n' "$tool" >&2
+    [ "$tool" = pdftotext ] && printf '      brew install poppler\n' >&2
+    _missing=1
   }
 done
+if [ "$_missing" -ne 0 ]; then
+  printf '  A skipped case is not a passed case; refusing to report success.\n\n' >&2
+  exit 1
+fi
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "  ✓ $1"; }
@@ -142,10 +157,24 @@ else bad "compressed PDF: secret NOT detected (rc=$SUT_RC)" "$SUT_OUT"; fi
 # 2. REGRESSION GUARD for the approach itself: prove the raw-byte scan this
 #    replaces would have MISSED that same file. If this ever starts passing,
 #    raw scanning became viable and the pdftotext dependency can be revisited.
-if gitleaks stdin --no-banner --redact --config .gitleaks.toml < secret.pdf 2>&1 \
-     | grep -q "no leaks found"; then
+# rc is captured rather than piped: under `pipefail` ANY non-zero from gitleaks
+# failed the pipeline, so an ERROR (exit 2, bad config, unreadable file) was
+# reported as "raw-byte scan now finds it" -- a message pointing at the opposite
+# conclusion from what happened. 0 = clean, 1 = leaks found, anything else = the
+# scanner failed and this case proves nothing either way.
+# `VAR=$(cmd); rc=$?` does NOT work under errexit: the assignment IS the command,
+# so a non-zero substitution aborts the script before $? is ever read. Verified.
+# That would have killed the suite precisely when gitleaks exits 1 -- the case
+# this assertion exists to detect. `|| RAW_RC=$?` keeps errexit from firing.
+RAW_RC=0
+RAW_OUT=$(gitleaks stdin --no-banner --redact --config .gitleaks.toml < secret.pdf 2>&1) || RAW_RC=$?
+if [ "$RAW_RC" -eq 0 ] && grep -q "no leaks found" <<<"$RAW_OUT"; then
   ok "raw-byte scan of the same PDF finds nothing (why pdftotext is required)"
-else bad "raw-byte scan now finds it — revisit the pdftotext dependency" ""; fi
+elif [ "$RAW_RC" -eq 1 ]; then
+  bad "raw-byte scan now finds it — revisit the pdftotext dependency" "$RAW_OUT"
+else
+  bad "raw-byte scan could not run (gitleaks exit $RAW_RC) — this case proved nothing" "$RAW_OUT"
+fi
 
 # 3. Secret inside a real xlsx (zip container) must be caught.
 new_repo c3
@@ -169,7 +198,15 @@ else bad "clean binaries: wrong verdict or zero-byte 'pass' (rc=$SUT_RC)" "$SUT_
 new_repo c5
 build_pdf scanned.pdf ""
 git add scanned.pdf; run_sut
-if [ "$SUT_RC" -ne 0 ] && grep -q "UNKNOWN" <<<"$SUT_OUT"; then
+# Names the file AND the reason. A bare "UNKNOWN" match passes whenever ANY file
+# is unknown, so this case would have stayed green while a different file failed
+# and scanned.pdf sailed through -- the assertion would survive the very
+# regression it exists to catch.
+# -F and a bounded token: the `.` in "scanned.pdf" is a regex any-char, so a
+# plain grep would also match "scannedXpdf". Fixed-string match, and the reason
+# text is included so the assertion pins WHY the file was unknown, not just that
+# its name appeared somewhere in the output.
+if [ "$SUT_RC" -ne 0 ] && grep -qF 'scanned.pdf (no text layer' <<<"$SUT_OUT"; then
   ok "image-only PDF reports UNKNOWN instead of clean"
 else bad "image-only PDF reported clean (rc=$SUT_RC)" "$SUT_OUT"; fi
 

@@ -242,6 +242,10 @@ fi
 
 printf '\n.gitleaks.toml — documented coverage\n'
 
+# A value that appears NOWHERE else, so finding it in a redacted report is
+# unambiguous evidence the report leaked it.
+REDACT_PROBE="Zq7Wm3Pl9Kx2Nb5Vt8Yr"
+
 FIX="$WORK/fixtures"
 mkdir -p "$FIX/plain" "$FIX/tests/fixtures"
 printf 'api_key = "%s"\n' "$PROBE_VALUE"          > "$FIX/plain/probe.txt"
@@ -260,6 +264,27 @@ printf 'api_key = "%s"\n' "$PROBE_VALUE"          > "$FIX/plain/probe.png"
 # (?i) would pass every assertion in this file while silently changing coverage.
 printf 'api_key = "%s"\n' "$PROBE_VALUE"          > "$FIX/plain/PHOTO.PNG"
 
+# .lock regression. The blanket `(.*?)\.lock$` exclusion was removed after
+# measuring that it suppressed nothing across the fleet -- but the glob matched
+# ANY path ending in .lock, so `credentials.lock` was exempt too. Without a
+# fixture, re-adding the exclusion would pass every assertion in this file.
+printf 'api_key = "%s"\n' "$PROBE_VALUE"          > "$FIX/plain/credentials.lock"
+
+# Anchored $env: allowlist, both directions. An EXACT reference is not a secret
+# and must stay suppressed; a value merely CONTAINING one is a secret wearing a
+# reference as a prefix, and the unanchored pattern exempted it. One fixture
+# each, because a single-direction test passes under either pattern.
+printf 'token = "$env:GITHUB_TOKEN"\n'            > "$FIX/plain/envref.txt"
+printf 'token = "$env:X%s"\n' "$PROBE_VALUE"      > "$FIX/plain/envprefix.txt"
+
+# Redaction regression. Both these rules once reported the CREDENTIAL in their
+# --redact output: powershell-plaintext-password captured the variable NAME, and
+# vsphere-credential-literal had no capture group at all, so the whole line was
+# the "secret". The assertions below check the redacted REPORT, not just that the
+# rule fires -- a rule can fire correctly and still print the password.
+printf '$password = "%s"\n' "$REDACT_PROBE"       > "$FIX/plain/ps_secret.ps1"
+printf 'Connect-VIServer -Server vc01 -Password "%s"\n' "$REDACT_PROBE" > "$FIX/plain/vsphere.ps1"
+
 # scan() aborts inside a command substitution, which ends only the SUBSHELL --
 # the status is what reaches here, so it must be checked or the abort is inert.
 FLAGGED=$(scan "$FIX" "$WORK/report-full.json") || exit 1
@@ -271,6 +296,47 @@ expect_clean   "suppresses a placeholder token (allowlist regex)" "$FLAGGED" "pl
 # Both directions of the image exclusion. The first is the regression: it FAILED before
 # the pattern carried a literal dot, and it fails again the moment someone removes one.
 expect_flagged "non-image path ending in 'ico' is still scanned"  "$FLAGGED" "plain/mexico"
+expect_flagged "a secret in a .lock file is scanned (no blanket exclusion)" "$FLAGGED" "plain/credentials.lock"
+expect_clean   "an exact \$env: reference stays suppressed"        "$FLAGGED" "plain/envref.txt"
+expect_flagged "a secret merely PREFIXED by \$env: is still flagged" "$FLAGGED" "plain/envprefix.txt"
+
+# Firing is necessary but not sufficient: a rule can match correctly and still
+# PRINT the credential. This needs its own scan, because scan() above runs
+# WITHOUT --redact -- its report is expected to contain values, so asserting
+# against it would have tested nothing (and did, on the first attempt).
+scan "$FIX" "$WORK/report-redacted.json" --redact >/dev/null || exit 1
+# grep's exit codes: 0 match, 1 no match, >1 ERROR (unreadable file, bad args).
+# The first version sent every non-zero to pass, so a report grep could not READ
+# counted as "no leak found" -- the scanned-nothing-reads-clean shape, in the
+# assertion built to catch a redaction bug. Each status gets its own branch.
+# -F like the identifier greps below: the probe is alphanumeric today, but a
+# regex-quiet match should not depend on the constant staying metacharacter-free.
+_g=0; grep -qF "$REDACT_PROBE" "$WORK/report-redacted.json" || _g=$?
+if [ "$_g" -eq 0 ]; then
+  fail "--redact report LEAKS the credential value (check secretGroup on the custom rules)"
+elif [ "$_g" -eq 1 ]; then
+  pass "--redact report does not contain the credential value"
+else
+  fail "could not inspect the redacted report (grep exit $_g) — this proves nothing"
+fi
+# Absence of the value is necessary but not sufficient: a WHOLE-MATCH redaction
+# also removes the probe while masking the identifier too, and would pass the
+# check above. The contract is "identifier preserved, value replaced" -- assert
+# the preserved half explicitly, one identifier per rule under test.
+# '$password' WITH the dollar sign, not 'password': the RuleID
+# "powershell-plaintext-password" contains the bare word, so a bare-word grep
+# matches the report regardless of what redaction did -- the assertion would be
+# non-discriminating, which is the defect it was added to close.
+for _ident in '$password' 'Connect-VIServer'; do
+  _g=0; grep -qF "$_ident" "$WORK/report-redacted.json" || _g=$?
+  if [ "$_g" -eq 0 ]; then
+    pass "redacted report preserves the '$_ident' identifier"
+  elif [ "$_g" -eq 1 ]; then
+    fail "redacted report lost the '$_ident' identifier — whole-match redaction regressed"
+  else
+    fail "could not inspect the redacted report (grep exit $_g) — this proves nothing"
+  fi
+done
 expect_clean   "real image extensions stay excluded"              "$FLAGGED" "plain/probe.png"
 expect_clean   "uppercase image extensions stay excluded ((?i))"  "$FLAGGED" "plain/PHOTO.PNG"
 
