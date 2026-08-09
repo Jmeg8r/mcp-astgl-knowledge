@@ -62,7 +62,7 @@ pre-commit:
       glob: "*.py"
       run: |
         rc=0
-        ruff format --check {staged_files} || rc=$?
+        ruff format --check -- {staged_files} || rc=$?
         # 0 clean, 1 would-reformat. Advisory covers the SECOND one only.
         # Anything else is ruff failing rather than a formatting difference:
         # 2 = bad config or internal error, 127 = not installed. `|| true`
