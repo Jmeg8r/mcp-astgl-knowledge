@@ -26,7 +26,15 @@ tags = ["credential", "powercli"]
 [[rules]]
 id = "powershell-plaintext-password"
 description = "Plaintext password variable in PowerShell"
-regex = '''(?i)\$(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"][^'"$][^'"]{5,}['"]'''
+# The optional scope prefix is not decoration: `$script:password = "..."` and
+# `$global:pwd = "..."` are ordinary PowerShell and were BOTH missed by the
+# unprefixed pattern, while the plain `$password = "..."` was caught -- so the
+# rule read as working. `env:` is deliberately included: assigning a literal to
+# `$env:X` is still a plaintext secret, and a mere REFERENCE to an env var is
+# already covered by the `\$env:` allowlist regex below.
+# The {5,} after the first character means a 6-character minimum, which is what
+# keeps "abc" and other obvious placeholders out.
+regex = '''(?i)\$(?:(?:script|global|local|private|env|using):)?(password|passwd|pwd|secret|apikey|api_key|token)\s*=\s*['"][^'"$][^'"]{5,}['"]'''
 tags = ["credential", "powershell"]
 
 [[rules]]
@@ -155,10 +163,25 @@ paths = [
   # closed by scripts/scan-staged-binaries.sh, which routes svg through
   # `gitleaks stdin` (TEXT_SKIPPED_EXTS), asserted by selftest-binary-scan.sh.
   '''(?i)\.(png|jpg|jpeg|gif|webp|ico)$''',
+  # Lockfiles: hashes and integrity strings are high-entropy by construction and
+  # generate constant false positives; they carry no author-written credentials.
   '''(.*?)\.lock$''',
+  # Vendored dependency trees. Not ours to fix, and enormous.
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
-  '''(^|/)dist/''',
+  # NO dist/ EXCLUSION — removed 2026-08-09, and the removal is the point.
+  #
+  # It was here on the theory that minified build output trips entropy rules on
+  # every build. That was never measured. It was, on the two fleet repos that
+  # actually COMMIT a dist/ (13 tracked files between them): scanning them
+  # produces exactly the same findings as excluding them -- 0 and 14, every one
+  # of the 14 outside dist/. So the exclusion suppressed no noise, and its only
+  # live effect was that a bundler baking a leaked env var into committed build
+  # output would be invisible to every scanner in this stack.
+  #
+  # If minified noise does appear, add the exclusion in THAT repo rather than
+  # fleet-wide: a blanket allowlist entry that hides a real class of secret to
+  # pre-empt a hypothetical class of noise is the wrong trade.
   '''(^|/)tests?/fixtures/''',
 ]
 
@@ -167,5 +190,5 @@ regexes = [
   '''(?i)xxxx+''',
   '''<[A-Z_]{3,}>''',            # <API_KEY> style placeholders in docs
   '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',  # ${ENV_VAR} references
-  '''\$env:[A-Za-z_][A-Za-z0-9_]*''',  # PowerShell env var references
+  '''(?i)\$env:[A-Za-z_][A-Za-z0-9_]*''',  # PowerShell env var references
 ]
