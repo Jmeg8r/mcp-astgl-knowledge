@@ -49,10 +49,12 @@ pre-commit:
     # until the hook is over.
     #
     # The cost is stated rather than hidden: newly unformatted Python is now
-    # REPORTED, not fixed for you. The shape deliberately matches `lint-python`
-    # below — `--check`, `|| true`, no `--fix`, no `stage_fixed`.
+    # REPORTED, not fixed for you. Like `lint-python` below it uses `--check`
+    # and no `--fix`, but NOT that job's blanket `|| true` — see the exit-code
+    # handling in the run block, which passes 0 and 1 and blocks anything above.
     #
-    # To make formatting blocking again, drop the `|| true`. Do NOT restore
+    # To make formatting blocking again, change that `-gt 1` to `-gt 0`, so a
+    # would-reformat (exit 1) fails too. Do NOT restore
     # `stage_fixed: true` to get auto-formatting back without re-reading the
     # above: it returns every gate in this hook to inspecting stale content.
     format-python:
