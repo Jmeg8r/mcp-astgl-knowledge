@@ -173,6 +173,39 @@ if [ "$SUT_RC" -ne 0 ] && grep -q "UNKNOWN" <<<"$SUT_OUT"; then
   ok "image-only PDF reports UNKNOWN instead of clean"
 else bad "image-only PDF reported clean (rc=$SUT_RC)" "$SUT_OUT"; fi
 
+# 5b. A RENAMED binary is still scanned. `--diff-filter=ACM` enumerated a rename
+#     as nothing at all, so a `git mv` of a file holding a secret produced
+#     "no binary or document files staged" and exit 0. Regression guard for ACMRT.
+new_repo c5b
+# Without this, a repo (or a user) with diff.renames=false reports the staged
+# `git mv` as A, so --diff-filter=ACMRT never exercises the R path and this case
+# silently stops testing what it was written to test.
+git config diff.renames true
+build_xlsx orig.xlsx "$SECRET"
+git add orig.xlsx; git commit -qm "add" >/dev/null 2>&1
+git mv orig.xlsx renamed.xlsx; git add -A; run_sut
+if [ "$SUT_RC" -ne 0 ] && grep -q "SECRET in renamed.xlsx" <<<"$SUT_OUT"; then
+  ok "a renamed binary is still scanned (ACMRT, not ACM)"
+else bad "renamed binary escaped the scan (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 5c. SVG is TEXT that the primary gate skips by path. It must be INSPECTED --
+#     not bucketed opaque, which reports "judge by hand" and passes.
+new_repo c5c
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>k %s</desc></svg>\n' "$SECRET" > logo.svg
+git add logo.svg; run_sut
+if [ "$SUT_RC" -ne 0 ] && grep -q "SECRET in logo.svg" <<<"$SUT_OUT"; then
+  ok "a secret in an .svg is inspected, not reported opaque"
+else bad "svg not inspected (rc=$SUT_RC)" "$SUT_OUT"; fi
+
+# 5d. ...and a clean SVG must actually be READ, not silently skipped: a zero-byte
+#     "pass" is the failure this whole file exists to catch.
+new_repo c5d
+printf '<svg xmlns="http://www.w3.org/2000/svg"><desc>company logo</desc></svg>\n' > clean.svg
+git add clean.svg; run_sut
+if [ "$SUT_RC" -eq 0 ] && grep -qE "inspected 1 file\(s\), [1-9][0-9]* bytes read" <<<"$SUT_OUT"; then
+  ok "a clean .svg is read, with non-zero bytes reported"
+else bad "clean svg not actually inspected (rc=$SUT_RC)" "$SUT_OUT"; fi
+
 # 6. Opaque formats are reported as NOT INSPECTED but do not block.
 new_repo c6
 printf '\x89PNG\r\n\x1a\n binary junk' > shot.png

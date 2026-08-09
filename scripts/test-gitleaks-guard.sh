@@ -20,7 +20,14 @@
 # Usage:  scripts/test-gitleaks-guard.sh
 # Exit:   0 all assertions passed · 1 one or more failed
 
-set -uo pipefail   # deliberately NOT -e: assertions must all run, then report a total
+# errexit ON: a failing fixture step (mkdir, write, chmod) must abort rather than
+# let later assertions run against a half-built fixture and report a verdict about
+# nothing. Every EXPECTED non-zero status in this file is already captured
+# explicitly (`rc=0; cmd || rc=$?`) or tested inside an `if`, both of which errexit
+# does not trip.
+set -euo pipefail   # -e added deliberately: verified that a failing assertion still
+                    # runs the rest and prints the total, because every expected
+                    # non-zero status here is captured or tested inside an `if`.
 
 # Detach from any inherited git context BEFORE the temp repo below is created.
 #
@@ -38,6 +45,14 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 GUARD="$SCRIPT_DIR/gitleaks-guard.sh"
 CONFIG="$REPO_ROOT/.gitleaks.toml"
+# Guarded exactly as gitleaks-guard.sh guards its own source, and for the same
+# reason: sourcing a missing file aborts under `set -e` with a bare shell error
+# naming neither this test nor the file it wanted. -f as well as -r because
+# `[ -r ]` is true for a directory.
+if [ ! -f "$SCRIPT_DIR/gitleaks-version.env" ] || [ ! -r "$SCRIPT_DIR/gitleaks-version.env" ]; then
+  printf '\n✗ test-gitleaks-guard: cannot read %s\n\n' "$SCRIPT_DIR/gitleaks-version.env" >&2
+  exit 1
+fi
 # shellcheck source=scripts/gitleaks-version.env
 # shellcheck disable=SC1091  # resolved at runtime; the source= directive above covers -x runs
 . "$SCRIPT_DIR/gitleaks-version.env"
@@ -391,6 +406,14 @@ fi
 # --- report -----------------------------------------------------------------
 
 printf '\n%s assertions run, %s failed, %s skipped\n' "$RUN" "$FAILED" "$SKIPPED"
+# A suite that ran NOTHING is not a suite that passed. Without this, an early
+# `continue`/skip path or a future refactor that stops registering cases prints
+# the green line over zero evidence -- the same fail-open this file exists to
+# catch, in the file that catches it.
+if [ "$RUN" -eq 0 ]; then
+  printf '\n✗ no assertions ran — the self-test inspected nothing, which is UNKNOWN, not clean.\n\n'
+  exit 1
+fi
 if [ "$FAILED" -ne 0 ]; then
   printf '\n✗ gitleaks does not behave as .gitleaks.toml documents. Fix the config or the comment — do not delete the test.\n\n'
   exit 1

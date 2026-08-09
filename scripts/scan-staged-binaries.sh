@@ -53,12 +53,19 @@ PDF_EXTS=(pdf)
 # and deliberately NOT blocking -- a credential in a screenshot is invisible to
 # a text scanner either way, so blocking here buys noise, not coverage.
 # shellcheck disable=SC2034  # read indirectly by in_list; see its definition
-OPAQUE_EXTS=(png jpg jpeg gif svg webp ico bmp tif tiff avif heic
+OPAQUE_EXTS=(png jpg jpeg gif webp ico bmp tif tiff avif heic
              mp3 mp4 mov avi mkv wav aiff flac
              exe dll so dylib bin dmg pkg iso
              woff woff2 ttf otf eot
              fbx blend casc obj glb gltf psd ai sketch
              pyc pdb class o a)
+
+# Text formats the PRIMARY gate skips by path. They need no extractor -- they are
+# already text -- but gitleaks' built-in allowlist refuses to read them, so they
+# reach neither scanner unless routed here. svg is the live case: XML, often
+# hand-edited, and a credential in one is plainly readable.
+# shellcheck disable=SC2034  # read indirectly by in_list
+TEXT_SKIPPED_EXTS=(svg)
 
 MAX_ARCHIVE_DEPTH=5
 
@@ -149,7 +156,7 @@ PY
 in_list() {
   local needle="$1" listname="$2" i item count
   # Enforce the invariant the comment above only asserted. `listname` reaching
-  # eval must be one of the three literals defined at the top of this file, and
+  # eval must be one of the bucket literals defined at the top of this file, and
   # today it always is — but that is a property of the current call sites, not
   # of the function, and a comment cannot fail. A future caller passing a
   # variable now gets a loud error instead of an eval. Cost is three string
@@ -162,7 +169,7 @@ in_list() {
   # not a data condition, and this script's contract is that a bucket it cannot
   # classify is never reported clean.
   case "$listname" in
-    ARCHIVE_EXTS|PDF_EXTS|OPAQUE_EXTS) ;;
+    ARCHIVE_EXTS|PDF_EXTS|TEXT_SKIPPED_EXTS|OPAQUE_EXTS) ;;
     *) printf '\n✗ in_list: refusing to expand unknown list name: %s\n' "$listname" >&2
        printf '  Add it to the allowlist in in_list() if it is legitimate.\n\n' >&2
        exit 2 ;;
@@ -209,7 +216,15 @@ run_gitleaks_stdin() {
   inspected_bytes=$((inspected_bytes + bytes))
   if [ "$rc" -eq 1 ]; then
     leaks=$((leaks + 1))
-    echo "  ✗ SECRET in $label"
+    # Quote ONLY when the name carries a control character. A newline or CR would
+    # break the diagnostic across lines and hide which file holds the secret;
+    # spaces are harmless and %q would render every ordinary name with
+    # backslashes, making the common case worse to read to fix a case that
+    # needs a deliberately hostile filename.
+    case "$label" in
+      *[[:cntrl:]]*) printf '  ✗ SECRET in %q\n' "$label" ;;
+      *)             printf '  ✗ SECRET in %s\n' "$label" ;;
+    esac
     sed 's/^/      /' "$out"
   fi
 }
@@ -242,11 +257,47 @@ run_gitleaks_archive() {
   inspected_bytes=$((inspected_bytes + bytes))
   if [ "$rc" -eq 1 ]; then
     leaks=$((leaks + 1))
-    echo "  ✗ SECRET in $label"
+    # %q for the same reason as the sed rewrite below: $label is a staged
+    # filename and may carry newlines or control characters.
+    printf '  ✗ SECRET in %q\n' "$label"
     # Findings name the temp probe path; point them back at the real file.
-    sed "s|$probe|$label|g; s/^/      /" "$out"
+    # Both sides are escaped: $label is a STAGED FILENAME, so a `|` ends the s
+    # command, a `&` in the replacement re-inserts the whole match, and a `\`
+    # escapes the next character -- corrupting the one message that tells you
+    # which file holds the secret.
+    _pat=$(printf '%s' "$probe" | sed 's/[|\\.*^$[]/\\&/g')
+    # %q, not %s: a filename may contain a NEWLINE, which would split the sed
+    # program itself. %q renders it as a single shell-quoted token, so the
+    # diagnostic stays on one line and still names the file unambiguously.
+    _rep=$(printf '%q' "$label" | sed 's/[|\\&]/\\&/g')
+    sed "s|$_pat|$_rep|g; s/^/      /" "$out"
   fi
 }
+
+# Enumerate FIRST, and fail closed if git itself fails. With the loop fed
+# straight from a process substitution, a git that exits non-zero produced an
+# empty stream -- so the walk ran zero times and the script reported "no binary
+# or document files staged" and exited 0. Verified with a git shim returning
+# 128: clean verdict over an unknown index. A scan that enumerated nothing is
+# UNKNOWN, never clean; that is this file's whole contract.
+STAGED_LIST="$TMPDIR_SCAN/staged.list"
+if ! git diff --cached --name-only -z --diff-filter=ACMRT > "$STAGED_LIST"; then
+  echo "  ✗ could not enumerate staged files (git exited non-zero)"
+  echo "      Refusing to report clean over an index this script could not read."
+  exit 1
+fi
+
+# The redirect that feeds the loop below already fails closed: under
+# `set -euo pipefail` an unreadable STAGED_LIST aborts before the summary
+# (verified, rc=1, for both a missing and an unreadable file). But it aborts
+# ANONYMOUSLY -- a bare "No such file or directory" naming neither this script
+# nor what it was doing -- which is the failure mode gitleaks-guard.sh exists to
+# replace. This check runs first so the cause has a name.
+if [ ! -r "$STAGED_LIST" ]; then
+  echo "  ✗ staged-file list is unreadable ($STAGED_LIST)"
+  echo "      Refusing to report clean over an index this script could not read."
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Walk the staged tree. -z because this repo family has filenames with spaces.
@@ -318,11 +369,26 @@ while IFS= read -r -d '' path; do
       continue
     fi
     run_gitleaks_stdin "$path" "$text"
+  elif in_list "$ext" TEXT_SKIPPED_EXTS; then
+    if [ -z "$pdf_canary" ]; then
+      if canary_stdin_ok; then pdf_canary=ok; else pdf_canary=bad; fi
+    fi
+    if [ "$pdf_canary" = bad ]; then
+      unknown+=("$path (gitleaks on PATH has no working \`stdin\` scan — needs 8.x)")
+      continue
+    fi
+    git cat-file blob ":$path" > "$staged"
+    run_gitleaks_stdin "$path" "$staged"
   elif in_list "$ext" OPAQUE_EXTS; then
     opaque+=("$path")
   fi
-  # Anything else is text: `gitleaks protect --staged` already covered it.
-done < <(git diff --cached --name-only -z --diff-filter=ACM)
+  # Anything else is text AND not path-skipped, so the primary `secrets` gate
+  # already read it. Formats the primary gate skips belong in TEXT_SKIPPED_EXTS.
+# ACMRT, not ACM. A `git mv` of a binary is status R and a symlink replaced by
+# a real file is T; both were enumerated as NOTHING, so the scan printed "no
+# binary or document files staged" and exited 0 over a staged secret. Verified.
+# D is excluded (no blob to read) and U (unmerged) has no single staged blob.
+done < "$STAGED_LIST"
 
 # ---------------------------------------------------------------------------
 # Report. N-scanned is the point: "nothing was reported" and "the check never

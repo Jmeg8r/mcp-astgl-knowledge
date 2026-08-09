@@ -147,7 +147,14 @@ description = "Known-safe paths and placeholder values"
 #
 # test-gitleaks-guard.sh asserts BOTH directions: `mexico` is flagged, `probe.png` is not.
 paths = [
-  '''(?i)\.(png|jpg|jpeg|gif|svg|webp|ico)$''',
+  # 'svg' REMOVED 2026-08-09, for the same reason 'pdf' was removed above and with
+  # the same caveat: SVG is XML, so a credential in one is plainly readable, and a
+  # local exclusion duplicating gitleaks' built-in one reads as THE reason it is
+  # skipped -- sending the next person to fix the wrong file. Deleting it does not
+  # by itself make SVG scanned; the built-in allowlist still skips it. That is
+  # closed by scripts/scan-staged-binaries.sh, which routes svg through
+  # `gitleaks stdin` (TEXT_SKIPPED_EXTS), asserted by selftest-binary-scan.sh.
+  '''(?i)\.(png|jpg|jpeg|gif|webp|ico)$''',
   '''(.*?)\.lock$''',
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
