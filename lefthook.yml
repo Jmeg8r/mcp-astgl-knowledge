@@ -34,11 +34,15 @@ pre-commit:
     #   after the hook completes:                    FORMATTED
     #
     # So every gate in this hook inspected the PRE-format blob while the
-    # POST-format blob was committed. Immaterial for `no-big-files` — a reformat
-    # cannot cross a size threshold — and not immaterial for `secrets`,
-    # `secrets-binaries` and `aikido`, which cleared bytes that were not the
-    # ones committed. A gate that inspects the wrong artifact is the defect this
-    # whole file exists to avoid.
+    # POST-format blob was committed. That is wrong for every gate here, in
+    # different sizes: `secrets`, `secrets-binaries` and `aikido` cleared bytes
+    # that were not the ones committed, and `no-big-files` measured a blob that
+    # was not the one committed either — a reformat changes whitespace and line
+    # breaks, so a file sitting just under the limit can cross it on the way in.
+    # Unlikely at a 5 MB threshold, but "unlikely" is not "cannot", and a gate
+    # whose correctness rests on an unstated size assumption is not a gate. A
+    # gate that inspects the wrong artifact is the defect this whole file exists
+    # to avoid.
     #
     # Ordering does NOT fix it, which is the counter-intuitive part and the
     # reason this is not simply `parallel: false`. That was measured too:
