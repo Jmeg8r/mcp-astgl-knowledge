@@ -99,12 +99,12 @@ pre-commit:
     lint-python:
       tags: lint
       glob: "*.py"
-      run: ruff check {staged_files} || true
+      run: ruff check -- {staged_files} || true
 
     lint-shell:
       tags: lint
       glob: "*.{sh,bash}"
-      run: shellcheck {staged_files} || true
+      run: shellcheck -- {staged_files} || true
 
     # WHY the single quotes and the env var: with a double-quoted script the
     # SHELL expands $r before pwsh ever sees it, so the command degraded to
@@ -141,7 +141,7 @@ pre-commit:
       exclude:
         - "lefthook.yml"
         - ".coderabbit.yaml"
-      run: yamllint -d relaxed {staged_files}
+      run: yamllint -d relaxed -- {staged_files}
 
     # The single most important hook in this file. Secrets must never reach
     # GitHub *or* CodeRabbit's cloud. This is your data-egress boundary.
@@ -170,7 +170,7 @@ pre-commit:
     lint-workflows:
       tags: lint
       glob: ".github/workflows/*.{yml,yaml}"
-      run: actionlint {staged_files}
+      run: actionlint -- {staged_files}
 
     # Keep the CodeRabbit config honest.
     #
