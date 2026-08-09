@@ -49,9 +49,15 @@ pre-commit:
     # until the hook is over.
     #
     # The cost is stated rather than hidden: newly unformatted Python is now
-    # REPORTED, not fixed for you. Like `lint-python` below it uses `--check`
-    # and no `--fix`, but NOT that job's blanket `|| true` — see the exit-code
-    # handling in the run block, which passes 0 and 1 and blocks anything above.
+    # REPORTED, not fixed for you. The contract, stated so nobody has to infer
+    # it from the shell: exit 0 is clean, exit 1 is "would reformat" and is
+    # ADVISORY so it passes, anything above 1 is ruff itself failing and BLOCKS.
+    #
+    # This is `ruff format --check` — the FORMATTER, where --check is a flag.
+    # `lint-python` below runs `ruff check`, the LINTER, a different subcommand.
+    # They are separate tools with separate exit-code meanings, so do not reason
+    # from one to the other. This job also has no blanket `|| true`; that one
+    # does.
     #
     # To make formatting blocking again, change that `-gt 1` to `-gt 0`, so a
     # would-reformat (exit 1) fails too. Do NOT restore
@@ -62,7 +68,7 @@ pre-commit:
       glob: "*.py"
       run: |
         rc=0
-        ruff format --check {staged_files} || rc=$?
+        ruff format --check -- {staged_files} || rc=$?
         # 0 clean, 1 would-reformat. Advisory covers the SECOND one only.
         # Anything else is ruff failing rather than a formatting difference:
         # 2 = bad config or internal error, 127 = not installed. `|| true`
@@ -93,12 +99,12 @@ pre-commit:
     lint-python:
       tags: lint
       glob: "*.py"
-      run: ruff check {staged_files} || true
+      run: ruff check -- {staged_files} || true
 
     lint-shell:
       tags: lint
       glob: "*.{sh,bash}"
-      run: shellcheck {staged_files} || true
+      run: shellcheck -- {staged_files} || true
 
     # WHY the single quotes and the env var: with a double-quoted script the
     # SHELL expands $r before pwsh ever sees it, so the command degraded to
@@ -135,7 +141,7 @@ pre-commit:
       exclude:
         - "lefthook.yml"
         - ".coderabbit.yaml"
-      run: yamllint -d relaxed {staged_files}
+      run: yamllint -d relaxed -- {staged_files}
 
     # The single most important hook in this file. Secrets must never reach
     # GitHub *or* CodeRabbit's cloud. This is your data-egress boundary.
@@ -164,7 +170,7 @@ pre-commit:
     lint-workflows:
       tags: lint
       glob: ".github/workflows/*.{yml,yaml}"
-      run: actionlint {staged_files}
+      run: actionlint -- {staged_files}
 
     # Keep the CodeRabbit config honest.
     #
