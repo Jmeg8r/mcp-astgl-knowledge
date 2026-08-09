@@ -22,11 +22,58 @@ pre-commit:
   parallel: true
   commands:
 
+    # ADVISORY as of 2026-08-09 — reports, does not rewrite, does not block.
+    #
+    # WHY the `stage_fixed: true` went away: it re-stages after the ENTIRE hook
+    # finishes, not after the command that owns it. Measured, fully serialised,
+    # formatter declared first:
+    #
+    #   STEP1 formatter, immediately after writing:  staged=ORIGINAL
+    #   STEP2 validator:                             staged=ORIGINAL
+    #   STEP3 later job:                             staged=ORIGINAL
+    #   after the hook completes:                    FORMATTED
+    #
+    # So every gate in this hook inspected the PRE-format blob while the
+    # POST-format blob was committed. Immaterial for `no-big-files` — a reformat
+    # cannot cross a size threshold — and not immaterial for `secrets`,
+    # `secrets-binaries` and `aikido`, which cleared bytes that were not the
+    # ones committed. A gate that inspects the wrong artifact is the defect this
+    # whole file exists to avoid.
+    #
+    # Ordering does NOT fix it, which is the counter-intuitive part and the
+    # reason this is not simply `parallel: false`. That was measured too:
+    # `parallel: false` and `priority` both still show the validator the
+    # pre-format blob, and `parallel: false` costs 3x the wall clock (3793ms vs
+    # 1216ms on a six-job sample) against this file's 1-3s budget. Nothing
+    # in-hook can move the index in time, because lefthook does not update it
+    # until the hook is over.
+    #
+    # The cost is stated rather than hidden: newly unformatted Python is now
+    # REPORTED, not fixed for you. Like `lint-python` below it uses `--check`
+    # and no `--fix`, but NOT that job's blanket `|| true` — see the exit-code
+    # handling in the run block, which passes 0 and 1 and blocks anything above.
+    #
+    # To make formatting blocking again, change that `-gt 1` to `-gt 0`, so a
+    # would-reformat (exit 1) fails too. Do NOT restore
+    # `stage_fixed: true` to get auto-formatting back without re-reading the
+    # above: it returns every gate in this hook to inspecting stale content.
     format-python:
       tags: format
       glob: "*.py"
-      run: ruff format {staged_files}
-      stage_fixed: true
+      run: |
+        rc=0
+        ruff format --check {staged_files} || rc=$?
+        # 0 clean, 1 would-reformat. Advisory covers the SECOND one only.
+        # Anything else is ruff failing rather than a formatting difference:
+        # 2 = bad config or internal error, 127 = not installed. `|| true`
+        # swallowed all four identically, so a broken or absent formatter
+        # reported as a clean pass — the failure mode this whole file exists to
+        # avoid. Before this job went advisory it had no `|| true` at all and
+        # those DID block; that behaviour is restored here deliberately.
+        if [ "$rc" -gt 1 ]; then
+          echo "✗ ruff format exited $rc — the formatter itself failed; this is not a formatting difference"
+          exit "$rc"
+        fi
 
     # ADVISORY, by deliberate choice — reports but does not block.
     #
