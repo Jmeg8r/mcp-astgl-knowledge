@@ -83,6 +83,46 @@ function report(db: InstanceType<typeof Database>): CitationReport {
   return result;
 }
 
+// --- The shared schema ---
+
+describe("createSchema", () => {
+  test("supports the insert citation-test-auto actually writes", () => {
+    // WHY this shape: asserting a column list would just restate createSchema back
+    //      to itself. This runs the automated runner's OWN insert statement,
+    //      verbatim including `method`, against a database built only by
+    //      createSchema — so the schema is checked against a real writer.
+    //      createSchema omitted `method` until PR #61 review: the column lived only
+    //      in citation-test-auto's PRAGMA-guarded ALTER, so every fixture built
+    //      "from the real DDL" was missing a production column, and on a fresh
+    //      database that ALTER threw "no such table: test_runs" outright.
+    const db = new Database(":memory:");
+    createSchema(db);
+
+    assert.doesNotThrow(() => {
+      db.prepare(
+        "INSERT INTO test_runs (run_date, engine, notes, method) VALUES (?, ?, ?, 'api')"
+      ).run("2026-08-10", "claude", "automated run via claude API");
+    });
+
+    const row = db
+      .prepare("SELECT method FROM test_runs WHERE run_date = ?")
+      .get("2026-08-10") as { method: string };
+    assert.equal(row.method, "api");
+
+    // WHY: the manual path omits method entirely and relies on the default, which
+    //      is what distinguishes legacy interactive runs from API ones in reports.
+    db.prepare(
+      "INSERT INTO test_runs (run_date, engine, notes) VALUES (?, ?, NULL)"
+    ).run("2026-05-05", "perplexity");
+    const manual = db
+      .prepare("SELECT method FROM test_runs WHERE run_date = ?")
+      .get("2026-05-05") as { method: string };
+    assert.equal(manual.method, "manual");
+
+    db.close();
+  });
+});
+
 // --- The marker itself ---
 
 describe("ERROR snippet marker", () => {

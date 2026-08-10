@@ -90,4 +90,33 @@ describe("citation-test entry-point guard", () => {
       rmSync(workDir, { recursive: true, force: true });
     }
   });
+
+  // WHY this case exists: the test above pins only one half of the guard. A guard
+  //      reduced to `const isEntryPoint = false` passes it while silently killing
+  //      the CLI for every subcommand — the module would load and do nothing. Both
+  //      directions have to be nailed down, or "the guard works" means "the guard
+  //      is off". Caught in review of PR #61; the mutation sweep for that PR had
+  //      tested `if (true)` and never `if (false)`.
+  test("running the module directly still runs main()", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", MODULE], {
+      encoding: "utf8",
+      cwd: REPO_ROOT,
+      timeout: PROBE_TIMEOUT_MS,
+    });
+
+    assert.equal(
+      result.error,
+      undefined,
+      `child could not be run (${result.error?.message}) — this is a harness failure`
+    );
+    assert.ok(
+      (result.stderr ?? "").includes(USAGE_BANNER),
+      "main() did not run on direct invocation — isEntryPoint is never true, so " +
+        "the CLI is dead for every subcommand. stderr:\n" + (result.stderr ?? "")
+    );
+    // WHY status 1: main() rejects a missing subcommand. Asserting the exit code as
+    //      well as the banner distinguishes "main() ran and refused" from "something
+    //      else printed something that happened to contain the banner text".
+    assert.equal(result.status, 1);
+  });
 });
