@@ -185,6 +185,20 @@ async function main() {
   console.error(`Reading: ${PROJECTS_JSON_PATH}`);
   const raw = readFileSync(PROJECTS_JSON_PATH, "utf-8");
   const data = JSON.parse(raw) as ProjectsData;
+
+  // WHAT: Verify `projects` is an array before reading .length or iterating it.
+  // WHY: Same defect class as the Anthropic web_search parse crash (see
+  //      citation-parse.ts). The `as ProjectsData` cast asserts a shape nobody
+  //      checked, and this file is written by a sibling repo we do not control.
+  //      Without this, a shape change prints "Found undefined projects" and then
+  //      dies with a bare "data.projects is not iterable" — an error that names
+  //      a variable instead of the file that is actually wrong.
+  if (!Array.isArray(data.projects)) {
+    console.error(`No "projects" array in: ${PROJECTS_JSON_PATH}`);
+    console.error("Check the file's shape — astgl-site may have changed it.");
+    process.exit(1);
+  }
+
   console.error(`Found ${data.projects.length} projects\n`);
 
   const knowledgeDb = initKnowledgeDb();

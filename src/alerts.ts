@@ -219,8 +219,14 @@ function checkZeroCitationArticles(
   const citedUrls = new Set<string>();
   for (const row of citedRows) {
     try {
-      const urls: string[] = JSON.parse(row.content_cited);
-      for (const url of urls) citedUrls.add(url);
+      // WHAT: Check the parse result is an array before iterating it.
+      // WHY: JSON.parse returns `any`, so annotating `string[]` asserted a shape
+      //      nothing had checked. Matches the guarded pattern already used in
+      //      search.ts listTags().
+      const urls = JSON.parse(row.content_cited);
+      if (Array.isArray(urls)) {
+        for (const url of urls) citedUrls.add(url);
+      }
     } catch {
       // Skip malformed
     }
@@ -371,7 +377,14 @@ async function checkCompetitorServers(
         }>;
       };
 
-      if (!data.servers) continue;
+      // WHAT: Require an actual array, not merely a truthy value.
+      // WHY: Same defect class as the Anthropic web_search parse crash fixed in
+      //      citation-parse.ts — a truthy non-array (an error object, a string)
+      //      passes `if (!data.servers)` and then throws inside for...of. Here
+      //      the throw is swallowed by the catch below, so one malformed
+      //      registry response would silently drop this search term's results
+      //      with no log line at all.
+      if (!Array.isArray(data.servers)) continue;
 
       for (const server of data.servers) {
         // Skip our own server
