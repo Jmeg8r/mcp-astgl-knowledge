@@ -76,50 +76,66 @@ type Engine = (typeof ENGINES)[number];
 // WHY: Exported so tests build fixtures from the real DDL instead of a second copy
 //      that drifts (Mistake #8) — the same reason knowledge-db.ts exports
 //      runMigrations(). Idempotent: every statement is IF NOT EXISTS.
+//
+//      All five statements run in ONE transaction, per the repo convention that a
+//      multi-table write is transactional. SQLite makes DDL transactional, so a
+//      failure partway (disk full, a killed process, a lock) rolls the whole schema
+//      back rather than leaving a half-built database behind, and two processes
+//      opening the same fresh file cannot interleave their CREATEs.
+//
+//      Deliberately NOT the shape of runMigrations(), which is non-transactional on
+//      purpose: its try/catch-per-ALTER idiom uses the throw as control flow — an
+//      ALTER that fails means "already applied" and gates a one-time backfill.
+//      Wrapping that would break it. This function has no expected failures, so the
+//      two cases differ despite both being schema code.
 export function createSchema(db: InstanceType<typeof Database>): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS target_questions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      question TEXT NOT NULL UNIQUE,
-      expected_url TEXT NOT NULL,
-      category TEXT NOT NULL DEFAULT 'general'
-    )
-  `);
+  const create = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS target_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question TEXT NOT NULL UNIQUE,
+        expected_url TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'general'
+      )
+    `);
 
-  // WHY method lives here: citation-test-auto.ts writes this column and used to be
-  //      the only place that defined it, via a PRAGMA-guarded ALTER. That made this
-  //      function an INCOMPLETE copy of the live schema — the exact drift it claims
-  //      to prevent — and left fixtures built from it missing a production column.
-  //      Column order matches the live table, where method was appended by ALTER.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS test_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_date TEXT NOT NULL,
-      engine TEXT NOT NULL,
-      notes TEXT,
-      method TEXT DEFAULT 'manual'
-    )
-  `);
+    // WHY method lives here: citation-test-auto.ts writes this column and used to
+    //      be the only place that defined it, via a PRAGMA-guarded ALTER. That made
+    //      this function an INCOMPLETE copy of the live schema — the exact drift it
+    //      claims to prevent — and left fixtures built from it missing a production
+    //      column. Column order matches the live table, where method came by ALTER.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS test_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_date TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        notes TEXT,
+        method TEXT DEFAULT 'manual'
+      )
+    `);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS test_results (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_id INTEGER NOT NULL REFERENCES test_runs(id),
-      question_id INTEGER NOT NULL REFERENCES target_questions(id),
-      cited INTEGER NOT NULL DEFAULT 0,
-      cited_url TEXT,
-      position INTEGER,
-      snippet TEXT,
-      UNIQUE(run_id, question_id)
-    )
-  `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS test_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES test_runs(id),
+        question_id INTEGER NOT NULL REFERENCES target_questions(id),
+        cited INTEGER NOT NULL DEFAULT 0,
+        cited_url TEXT,
+        position INTEGER,
+        snippet TEXT,
+        UNIQUE(run_id, question_id)
+      )
+    `);
 
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_results_run ON test_results(run_id)"
-  );
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_runs_date ON test_runs(run_date)"
-  );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_results_run ON test_results(run_id)"
+    );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_runs_date ON test_runs(run_date)"
+    );
+  });
+
+  create();
 }
 
 function initDb(): InstanceType<typeof Database> {

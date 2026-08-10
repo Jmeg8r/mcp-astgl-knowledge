@@ -121,6 +121,39 @@ describe("createSchema", () => {
 
     db.close();
   });
+
+  test("a failure partway through rolls the whole schema back", () => {
+    // WHY this construction: the last statement creates the index
+    // idx_results_run. Occupying that NAME with a table makes exactly that
+    // statement fail ("there is already a table named ..."), after the three
+    // CREATE TABLEs have already run — which is the interleaving the transaction
+    // exists to prevent. Without it, a fresh database would be left half-built.
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE idx_results_run (x INTEGER)");
+
+    assert.throws(() => createSchema(db), /already a table named idx_results_run/);
+
+    const tables = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>
+    ).map((t) => t.name);
+
+    for (const rolledBack of ["target_questions", "test_runs", "test_results"]) {
+      assert.ok(
+        !tables.includes(rolledBack),
+        `${rolledBack} survived a failed createSchema — the DDL is not in a ` +
+          `transaction. Tables present: ${tables.join(", ")}`
+      );
+    }
+
+    // WHY assert the decoy is still there: if the rollback had somehow removed
+    //     everything, the loop above would pass for the wrong reason. This pins
+    //     that the transaction rolled back OUR statements and nothing else.
+    assert.deepEqual(tables, ["idx_results_run"]);
+
+    db.close();
+  });
 });
 
 // --- The marker itself ---
