@@ -153,6 +153,23 @@ Additional rules (not yet uniform in the codebase, but required for new code):
 - A run that errors on **every** item must fail loudly and record nothing — never let
   a fully-broken run enter historical metrics as a legitimate zero (this is the
   citation-test rule from PR #15; it generalizes).
+- **The reader half of that rule is separate, and was missing for three months.** PR #15
+  stopped a fully-failed run from being *written*; it did not stop the ones already
+  written from being *read* as legitimate. The citation report counted every
+  `test_results` row as a test, including the 184 of 745 (25%) that
+  `citation-test-auto.ts` stamps `ERROR:` when a query throws — nine of those runs were
+  100% errors and still reported "0% cited, tested 20". Fixed in
+  `src/citation-error-rows.ts`, which owns the marker for both sides.
+  → **Rule: whenever a writer starts marking rows as invalid, find every reader that
+  aggregates that table in the same PR.** A guard on the write path is half a fix, and
+  the unfixed half is the one that quietly reshapes a metric you already trust.
+  Two traps this specific fix had to survive, both of which produce a plausible wrong
+  number rather than an error: a bare `NOT LIKE 'ERROR:%'` also discards the manual
+  path's `snippet = NULL` rows (SQL `NULL NOT LIKE x` is NULL, not TRUE — 496 rows
+  survive instead of 561), and moving the predicate into a `WHERE` clause collapses the
+  report's `LEFT JOIN`s and makes fully-errored runs vanish entirely instead of showing
+  as degraded. **A rate over an empty denominator is reported as `null`, never `0%`** —
+  same standard as `publish-drift.ts`.
 
 ## Mistakes you will make in this repo — named, with the rule that prevents each
 
