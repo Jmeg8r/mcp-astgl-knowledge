@@ -12,7 +12,7 @@
       "Generate report: npm run citation-test -- report",
       "citation_rate is null when tested is 0 — that means NOTHING was measured, not a 0% result. Never treat a null rate as a low rate.",
       "Every bucket carries an errored count. A high errored relative to tested means the RUN is degraded (API keys, parse crashes) — investigate the pipeline before drawing any conclusion about the content.",
-      "If citation rate drops below 10% on a run with errored=0, flag for strategy review.",
+      "If citation rate drops below 10% on a run where errored is under 10% of tested, flag for strategy review. At or above that share, treat the run as degraded and investigate the pipeline before judging the content.",
       "If specific categories are underperforming, consider content updates.",
       "Tip: Test one engine at a time — 28 questions takes ~20 min per engine."
     ]
