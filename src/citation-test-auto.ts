@@ -21,6 +21,8 @@ import { join } from "path";
 import { readFileSync, existsSync } from "fs";
 import Database from "better-sqlite3";
 
+import { formatErrorSnippet } from "./citation-error-rows.js";
+
 // WHAT: Load .env from project root before reading process.env.
 // WHY: Node's --env-file flag silently drops some values (observed with
 //      Anthropic-style keys); a direct parse is more reliable.
@@ -291,8 +293,14 @@ async function runEngine(engine: Engine, db: InstanceType<typeof Database>): Pro
       }
     } catch (err) {
       errors++;
-      console.error(`ERROR: ${(err as Error).message.slice(0, 100)}`);
-      insertResult.run(runId, q.id, 0, null, null, `ERROR: ${(err as Error).message}`);
+      // WHY formatErrorSnippet: the marker this stamps is the ONLY thing that tells
+      //      the report in citation-test.ts that this row is a failed query rather
+      //      than a measured non-citation. Both sides now derive it from one
+      //      constant so a reworded prefix here cannot silently re-inflate the
+      //      denominator there.
+      const snippet = formatErrorSnippet(err);
+      console.error(snippet.slice(0, 100));
+      insertResult.run(runId, q.id, 0, null, null, snippet);
     }
     await sleep(RATE_LIMIT_DELAY_MS);
   }
