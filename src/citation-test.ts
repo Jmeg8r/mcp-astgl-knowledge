@@ -12,7 +12,7 @@
  *   npm run citation-test -- questions     List all target questions
  */
 
-import { join } from "path";
+import { dirname } from "path";
 import { pathToFileURL } from "url";
 import { existsSync, mkdirSync } from "fs";
 import Database from "better-sqlite3";
@@ -23,8 +23,12 @@ import {
   SQL_IS_ERROR_ROW,
   SQL_IS_TESTED_ROW,
 } from "./citation-error-rows.js";
+import { resolveCitationTestDbPath } from "./db-path.js";
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "citation-test.db");
+// WHY resolveCitationTestDbPath rather than a join() here: CLAUDE.md's rule is
+//      that nothing resolves a DB path directly — db-path.ts owns every one of
+//      them, so citation-test-auto.ts cannot drift onto a different file.
+const DB_PATH = resolveCitationTestDbPath();
 
 // WHAT: Target questions derived from ASTGL content — astgl.ai answer articles
 //       plus tools.astgl.ai "best AI tool for X" comparison pages.
@@ -82,12 +86,18 @@ export function createSchema(db: InstanceType<typeof Database>): void {
     )
   `);
 
+  // WHY method lives here: citation-test-auto.ts writes this column and used to be
+  //      the only place that defined it, via a PRAGMA-guarded ALTER. That made this
+  //      function an INCOMPLETE copy of the live schema — the exact drift it claims
+  //      to prevent — and left fixtures built from it missing a production column.
+  //      Column order matches the live table, where method was appended by ALTER.
   db.exec(`
     CREATE TABLE IF NOT EXISTS test_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_date TEXT NOT NULL,
       engine TEXT NOT NULL,
-      notes TEXT
+      notes TEXT,
+      method TEXT DEFAULT 'manual'
     )
   `);
 
@@ -113,7 +123,10 @@ export function createSchema(db: InstanceType<typeof Database>): void {
 }
 
 function initDb(): InstanceType<typeof Database> {
-  const dataDir = join(import.meta.dirname, "..", "data");
+  // WHY dirname(DB_PATH): the directory to create is wherever the database
+  //      actually resolves to. Hardcoding ../data would create the repo's data
+  //      folder while opening a file somewhere else entirely under the seam.
+  const dataDir = dirname(DB_PATH);
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 
   const db = new Database(DB_PATH);

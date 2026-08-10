@@ -22,6 +22,10 @@ import { readFileSync, existsSync } from "fs";
 import Database from "better-sqlite3";
 
 import { formatErrorSnippet } from "./citation-error-rows.js";
+// WHY importing the CLI module is safe: citation-test.ts runs main() behind an
+//      isEntryPoint guard, so this pulls in the schema without executing anything.
+import { createSchema } from "./citation-test.js";
+import { resolveCitationTestDbPath } from "./db-path.js";
 
 // WHAT: Load .env from project root before reading process.env.
 // WHY: Node's --env-file flag silently drops some values (observed with
@@ -47,7 +51,10 @@ function loadEnvFile(): void {
 
 loadEnvFile();
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "citation-test.db");
+// WHY resolved here, after loadEnvFile(): the resolver reads
+//      ASTGL_CITATION_TEST_DB, and loadEnvFile skips any key already present in
+//      the environment — so a seam set by the caller still wins over .env.
+const DB_PATH = resolveCitationTestDbPath();
 const ASTGL_HOST = "astgl.ai";
 const RATE_LIMIT_DELAY_MS = 1500;
 
@@ -68,9 +75,23 @@ interface Question {
 
 function openDb(): InstanceType<typeof Database> {
   const db = new Database(DB_PATH);
+
+  // WHAT: Ensure the tables exist before touching them.
+  // WHY: PRAGMA table_info on a MISSING table returns [] rather than throwing, so
+  //      the migration below read "no method column" and ran ALTER TABLE against a
+  //      table that did not exist — "no such table: test_runs" on any fresh
+  //      database, before a single query was sent. It survived because the
+  //      documented order is `citation-test -- init` first, so nobody reached this
+  //      path with an empty file. An empty result meaning "nothing to inspect" is
+  //      not the same as "nothing needs doing".
+  createSchema(db);
+
   // WHAT: Add `method` column if missing.
   // WHY: Distinguishes API-recorded runs from the legacy interactive ones in
-  //      reports. SQLite has no ALTER TABLE IF NOT EXISTS, so probe schema first.
+  //      reports. createSchema now defines it, so this only migrates databases
+  //      created before the column existed; SQLite has no ALTER TABLE IF NOT
+  //      EXISTS, so probe schema first. Kept deliberately — dropping it would
+  //      break exactly the older databases it exists for.
   const cols = db.prepare("PRAGMA table_info(test_runs)").all() as Array<{
     name: string;
   }>;
