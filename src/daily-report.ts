@@ -159,9 +159,14 @@ function getQueryStats(
   const citedCounts = new Map<string, number>();
   for (const row of allCited) {
     try {
-      const urls: string[] = JSON.parse(row.content_cited);
-      for (const url of urls) {
-        citedCounts.set(url, (citedCounts.get(url) || 0) + 1);
+      // WHAT: Check the parse result is an array before iterating it.
+      // WHY: JSON.parse returns `any`, so annotating `string[]` asserted a shape
+      //      nothing had checked. Matches search.ts listTags().
+      const urls = JSON.parse(row.content_cited);
+      if (Array.isArray(urls)) {
+        for (const url of urls) {
+          citedCounts.set(url, (citedCounts.get(url) || 0) + 1);
+        }
       }
     } catch {
       // Skip malformed JSON

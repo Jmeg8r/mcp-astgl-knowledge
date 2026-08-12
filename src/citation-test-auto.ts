@@ -8,6 +8,10 @@
  * WHY: Replaces the ~45min manual workflow in citation-test.ts with a ~2min
  *      automated run. Manual flow remains available as a fallback.
  *
+ * The queryX functions here are transport only — request construction, auth,
+ * status handling, retry. Response parsing lives in citation-parse.ts so it can
+ * be unit tested without spending API tokens.
+ *
  * Usage:
  *   npm run citation-test-auto -- weekly                  Run all 3 engines
  *   npm run citation-test-auto -- record-perplexity       One engine only
@@ -20,6 +24,12 @@
 import { join } from "path";
 import { readFileSync, existsSync } from "fs";
 import Database from "better-sqlite3";
+import {
+  parseChatGPT,
+  parseClaude,
+  parsePerplexity,
+  type QueryResult,
+} from "./citation-parse.js";
 
 import { formatErrorSnippet } from "./citation-error-rows.js";
 // WHY importing the CLI module is safe: citation-test.ts runs main() behind an
@@ -54,18 +64,12 @@ loadEnvFile();
 // WHY resolved here, after loadEnvFile(): the resolver reads
 //      ASTGL_CITATION_TEST_DB, and loadEnvFile skips any key already present in
 //      the environment — so a seam set by the caller still wins over .env.
+// (ASTGL_HOST no longer lives here — citation matching moved to
+//  citation-parse.ts along with the parsers.)
 const DB_PATH = resolveCitationTestDbPath();
-const ASTGL_HOST = "astgl.ai";
 const RATE_LIMIT_DELAY_MS = 1500;
 
 type Engine = "perplexity" | "claude" | "chatgpt";
-
-interface QueryResult {
-  cited: boolean;
-  citedUrl: string | null;
-  position: number | null;
-  snippet: string | null;
-}
 
 interface Question {
   id: number;
@@ -107,15 +111,6 @@ function getQuestions(db: InstanceType<typeof Database>): Question[] {
     .all() as Question[];
 }
 
-function findAstglInUrls(urls: string[]): { citedUrl: string | null; position: number | null } {
-  for (let i = 0; i < urls.length; i++) {
-    if (urls[i].includes(ASTGL_HOST)) {
-      return { citedUrl: urls[i], position: i + 1 };
-    }
-  }
-  return { citedUrl: null, position: null };
-}
-
 async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -144,16 +139,7 @@ async function queryPerplexity(question: string): Promise<QueryResult> {
     throw new Error(`Perplexity ${res.status}: ${body.slice(0, 300)}`);
   }
 
-  const data = (await res.json()) as {
-    citations?: string[];
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-
-  const urls = data.citations || [];
-  const { citedUrl, position } = findAstglInUrls(urls);
-  const snippet = data.choices?.[0]?.message?.content?.slice(0, 500) || null;
-
-  return { cited: citedUrl !== null, citedUrl, position, snippet };
+  return parsePerplexity(await res.json());
 }
 
 // WHAT: Claude with web_search server tool. Citations appear in the response
@@ -185,32 +171,7 @@ async function queryClaude(question: string): Promise<QueryResult> {
     throw new Error(`Anthropic ${res.status}: ${body.slice(0, 300)}`);
   }
 
-  const data = (await res.json()) as {
-    content?: Array<{
-      type: string;
-      text?: string;
-      content?: Array<{ url?: string; title?: string }>;
-      citations?: Array<{ url?: string }>;
-    }>;
-  };
-
-  const urls: string[] = [];
-  let textOut = "";
-  for (const block of data.content || []) {
-    if (block.type === "text" && block.text) {
-      textOut += block.text;
-      for (const c of block.citations || []) {
-        if (c.url) urls.push(c.url);
-      }
-    } else if (block.type === "web_search_tool_result" && block.content) {
-      for (const r of block.content) {
-        if (r.url) urls.push(r.url);
-      }
-    }
-  }
-
-  const { citedUrl, position } = findAstglInUrls(urls);
-  return { cited: citedUrl !== null, citedUrl, position, snippet: textOut.slice(0, 500) || null };
+  return parseClaude(await res.json());
 }
 
 // WHAT: OpenAI Responses API with web_search_preview tool. URL citations come
@@ -250,31 +211,7 @@ async function queryChatGPT(question: string): Promise<QueryResult> {
     throw new Error(`OpenAI ${res?.status}: ${lastBody.slice(0, 300)}`);
   }
 
-  const data = (await res.json()) as {
-    output?: Array<{
-      type: string;
-      content?: Array<{
-        type: string;
-        text?: string;
-        annotations?: Array<{ type: string; url?: string }>;
-      }>;
-    }>;
-  };
-
-  const urls: string[] = [];
-  let textOut = "";
-  for (const item of data.output || []) {
-    if (item.type !== "message" || !item.content) continue;
-    for (const c of item.content) {
-      if (c.type === "output_text" && c.text) textOut += c.text;
-      for (const a of c.annotations || []) {
-        if (a.type === "url_citation" && a.url) urls.push(a.url);
-      }
-    }
-  }
-
-  const { citedUrl, position } = findAstglInUrls(urls);
-  return { cited: citedUrl !== null, citedUrl, position, snippet: textOut.slice(0, 500) || null };
+  return parseChatGPT(await res.json());
 }
 
 const ENGINE_FNS: Record<Engine, (q: string) => Promise<QueryResult>> = {

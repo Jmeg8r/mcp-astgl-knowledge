@@ -184,7 +184,31 @@ async function main() {
 
   console.error(`Reading: ${PROJECTS_JSON_PATH}`);
   const raw = readFileSync(PROJECTS_JSON_PATH, "utf-8");
-  const data = JSON.parse(raw) as ProjectsData;
+  const parsed: unknown = JSON.parse(raw);
+
+  // WHAT: Verify the root is an object AND `projects` is an array before
+  //       reading .length or iterating it.
+  // WHY: Same defect class as the Anthropic web_search parse crash (see
+  //      citation-parse.ts). The `as ProjectsData` cast asserts a shape nobody
+  //      checked, and this file is written by a sibling repo we do not control.
+  //      Both halves of the guard are load-bearing: JSON.parse("null") returns
+  //      null, so `data.projects` on the root throws BEFORE Array.isArray could
+  //      run — the root's shape is an assumption of exactly the same kind as
+  //      the field's. Without this, a shape change prints "Found undefined
+  //      projects" and then dies with a bare "not iterable" error that names a
+  //      variable instead of the file that is actually wrong.
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    !("projects" in parsed) ||
+    !Array.isArray((parsed as { projects: unknown }).projects)
+  ) {
+    console.error(`No "projects" array in: ${PROJECTS_JSON_PATH}`);
+    console.error("Check the file's shape — astgl-site may have changed it.");
+    process.exit(1);
+  }
+  const data = parsed as ProjectsData;
+
   console.error(`Found ${data.projects.length} projects\n`);
 
   const knowledgeDb = initKnowledgeDb();
