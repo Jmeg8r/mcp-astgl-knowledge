@@ -64,3 +64,24 @@ const QUERY_LOG_DB_PATH = join(
 export function resolveQueryLogDbPath(): string {
   return process.env.ASTGL_QUERY_LOG_DB || QUERY_LOG_DB_PATH;
 }
+
+const CITATION_TEST_DB_PATH = join(
+  import.meta.dirname,
+  "..",
+  "data",
+  "citation-test.db"
+);
+
+// WHAT: Resolve where the AEO citation-test database lives.
+// WHY:  citation-test.ts and citation-test-auto.ts SHARE this one file — one
+//       records runs interactively, the other via the engine APIs, and the report
+//       aggregates both. A seam honoured by only one of them would point the
+//       writer and the reader at different databases, which is the query-log
+//       hazard above in miniature. One resolver, so a redirect moves both.
+//
+//       ASTGL_CITATION_TEST_DB exists so tests can drive the real scripts against
+//       a throwaway file. Without it the only way to exercise the fresh-database
+//       path is to run them against the production citation history.
+export function resolveCitationTestDbPath(): string {
+  return process.env.ASTGL_CITATION_TEST_DB || CITATION_TEST_DB_PATH;
+}

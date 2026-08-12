@@ -31,6 +31,12 @@ import {
   type QueryResult,
 } from "./citation-parse.js";
 
+import { formatErrorSnippet } from "./citation-error-rows.js";
+// WHY importing the CLI module is safe: citation-test.ts runs main() behind an
+//      isEntryPoint guard, so this pulls in the schema without executing anything.
+import { createSchema } from "./citation-test.js";
+import { resolveCitationTestDbPath } from "./db-path.js";
+
 // WHAT: Load .env from project root before reading process.env.
 // WHY: Node's --env-file flag silently drops some values (observed with
 //      Anthropic-style keys); a direct parse is more reliable.
@@ -55,7 +61,12 @@ function loadEnvFile(): void {
 
 loadEnvFile();
 
-const DB_PATH = join(import.meta.dirname, "..", "data", "citation-test.db");
+// WHY resolved here, after loadEnvFile(): the resolver reads
+//      ASTGL_CITATION_TEST_DB, and loadEnvFile skips any key already present in
+//      the environment — so a seam set by the caller still wins over .env.
+// (ASTGL_HOST no longer lives here — citation matching moved to
+//  citation-parse.ts along with the parsers.)
+const DB_PATH = resolveCitationTestDbPath();
 const RATE_LIMIT_DELAY_MS = 1500;
 
 type Engine = "perplexity" | "claude" | "chatgpt";
@@ -68,9 +79,23 @@ interface Question {
 
 function openDb(): InstanceType<typeof Database> {
   const db = new Database(DB_PATH);
+
+  // WHAT: Ensure the tables exist before touching them.
+  // WHY: PRAGMA table_info on a MISSING table returns [] rather than throwing, so
+  //      the migration below read "no method column" and ran ALTER TABLE against a
+  //      table that did not exist — "no such table: test_runs" on any fresh
+  //      database, before a single query was sent. It survived because the
+  //      documented order is `citation-test -- init` first, so nobody reached this
+  //      path with an empty file. An empty result meaning "nothing to inspect" is
+  //      not the same as "nothing needs doing".
+  createSchema(db);
+
   // WHAT: Add `method` column if missing.
   // WHY: Distinguishes API-recorded runs from the legacy interactive ones in
-  //      reports. SQLite has no ALTER TABLE IF NOT EXISTS, so probe schema first.
+  //      reports. createSchema now defines it, so this only migrates databases
+  //      created before the column existed; SQLite has no ALTER TABLE IF NOT
+  //      EXISTS, so probe schema first. Kept deliberately — dropping it would
+  //      break exactly the older databases it exists for.
   const cols = db.prepare("PRAGMA table_info(test_runs)").all() as Array<{
     name: string;
   }>;
@@ -226,8 +251,14 @@ async function runEngine(engine: Engine, db: InstanceType<typeof Database>): Pro
       }
     } catch (err) {
       errors++;
-      console.error(`ERROR: ${(err as Error).message.slice(0, 100)}`);
-      insertResult.run(runId, q.id, 0, null, null, `ERROR: ${(err as Error).message}`);
+      // WHY formatErrorSnippet: the marker this stamps is the ONLY thing that tells
+      //      the report in citation-test.ts that this row is a failed query rather
+      //      than a measured non-citation. Both sides now derive it from one
+      //      constant so a reworded prefix here cannot silently re-inflate the
+      //      denominator there.
+      const snippet = formatErrorSnippet(err);
+      console.error(snippet.slice(0, 100));
+      insertResult.run(runId, q.id, 0, null, null, snippet);
     }
     await sleep(RATE_LIMIT_DELAY_MS);
   }
