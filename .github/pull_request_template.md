@@ -14,7 +14,9 @@
 
 - [ ] `lefthook run pre-commit` clean
 - [ ] `lefthook run pre-push` clean
-- [ ] `cr review --base main` run and findings addressed
+- [ ] `cr review --base main` covered this PR head and findings are addressed;
+      use a full review if it auto-pauses, reports `already reviewed commits`,
+      or current-HEAD coverage is uncertain
       <!-- `main` is the executable default. If this PR targets a different
            branch, substitute it: reviewing a release- or feature-branch PR
            against main reports drift that is not this PR's diff, and misses

@@ -242,8 +242,9 @@ new_repo c16; over1 o.bin;  git add o.bin;                            run_sut; e
 # record, running the REAL checker against it.
 new_repo c18
 _shim="$WORK/c18-shim"; mkdir -p "$_shim"
+_realgit=$(command -v git)   # resolve BEFORE the shim shadows PATH below
 { echo '#!/bin/sh'
-  echo 'case "$*" in *"diff --cached"*"--raw"*) printf ":000000 100644 000 111 A" ;; *) exec /usr/bin/git "$@" ;; esac'
+  printf 'case "$*" in *"diff --cached"*"--raw"*) printf ":000000 100644 000 111 A" ;; *) exec %s "$@" ;; esac\n' "$_realgit"
 } > "$_shim/git"; chmod +x "$_shim/git"
 if OUT="$(PATH="$_shim:$PATH" bash "$SUT" 2>&1)"; then RC=0; else RC=$?; fi  # bash "$SUT": same parity as run_sut
 # -eq 1, not -ne 0: a deliberate rejection is exit 1. Accepting any non-zero

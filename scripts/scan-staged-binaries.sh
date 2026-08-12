@@ -474,14 +474,21 @@ STAGED_LIST="$TMPDIR_SCAN/staged.list"
 case "$MODE" in
   staged)
     enum_desc="the index"
-    git diff --cached --name-only -z --diff-filter=ACMRT > "$STAGED_LIST" ;;
+    # --no-relative is the `git diff` counterpart to --full-tree below. Unlike
+    # `git ls-tree`, `git diff` is not cwd-sensitive by default -- it becomes so
+    # only under a user's `diff.relative=true` config, which this hook does not
+    # control and does not know is set. Measured: with that config active, run
+    # from a subdirectory, files OUTSIDE it vanish from this list entirely rather
+    # than erroring -- the same silent-subset failure --full-tree exists to
+    # prevent for `ls-tree`, reached through a different git flag.
+    git diff --cached --no-relative --name-only -z --diff-filter=ACMRT > "$STAGED_LIST" ;;
   range)
     enum_desc="$RANGE_BASE...$RANGE_HEAD"
     # Three dots: changes introduced ON the head side since the merge base, which
     # is the PR's own diff. Two dots would also enumerate everything that landed on
     # the base branch since the fork point -- files this PR never touched, reported
     # against its author.
-    git diff --name-only -z --diff-filter=ACMRT "$RANGE_BASE...$RANGE_HEAD" > "$STAGED_LIST" ;;
+    git diff --no-relative --name-only -z --diff-filter=ACMRT "$RANGE_BASE...$RANGE_HEAD" > "$STAGED_LIST" ;;
   tree)
     enum_desc="every file in $TREE_REF"
     # --full-tree is load-bearing, and its absence fails silently clean. Unlike
@@ -495,6 +502,16 @@ case "$MODE" in
     # the "no cd, every path resolved by git itself" property the rest of this file
     # relies on.
     git ls-tree --full-tree -r -z --name-only "$TREE_REF" > "$STAGED_LIST" ;;
+  *)
+    # Not reachable today: $MODE is constrained to staged/range/tree at argument
+    # parse time, and an earlier case already rejects anything else before this
+    # point. Kept anyway -- an unmatched `case` with no default returns 0, which
+    # would otherwise let a stale or empty $STAGED_LIST silently walk as "nothing
+    # staged" rather than reaching the `|| {...}` handler right below, the exact
+    # fail-open shape that handler exists to prevent for every OTHER failure in
+    # this block. `false`, not `exit`: this must FEED that handler, not bypass it
+    # -- exit here would print no message at all and skip its diagnostics.
+    false ;;
 esac || {
   # Fail closed on an enumeration that errored. With the loop fed straight from a
   # process substitution, a git that exits non-zero produced an EMPTY stream -- so

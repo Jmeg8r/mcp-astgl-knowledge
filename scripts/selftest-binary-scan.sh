@@ -158,14 +158,19 @@ new_repo() {
 # `set +e`/`set -e` around it also works, but it disarms errexit for the duration,
 # and a suite that turns off its own safety to observe a failure is one edit away
 # from leaving it off.
+#
+# `bash "$SUT"`, not `"$SUT"`: matches how lefthook.yml invokes this script and how
+# scripts/selftest-no-big-files.sh invokes its own SUT, for the same stated reason --
+# executing "$SUT" directly requires the execute bit, and if that bit is ever
+# dropped, this suite would fail on a property the gate itself does not depend on.
 run_sut() {
-  if SUT_OUT="$("$SUT" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
+  if SUT_OUT="$(bash "$SUT" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
 }
 # Same capture, with arguments. Kept separate so the no-argument default path --
 # the one the pre-commit hook actually invokes -- is still exercised by a call
 # that passes literally nothing.
 run_sut_args() {
-  if SUT_OUT="$("$SUT" "$@" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
+  if SUT_OUT="$(bash "$SUT" "$@" 2>&1)"; then SUT_RC=0; else SUT_RC=$?; fi
 }
 
 echo "scan-staged-binaries.sh self-test"
@@ -342,7 +347,7 @@ mkdir -p "$WORK/stub"
 printf '#!/bin/sh\necho "unknown command" >&2\nexit 2\n' > "$WORK/stub/gitleaks"
 chmod +x "$WORK/stub/gitleaks"
 set +e
-STUB_OUT="$(PATH="$WORK/stub:$PATH" "$SUT" 2>&1)"; STUB_RC=$?
+STUB_OUT="$(PATH="$WORK/stub:$PATH" bash "$SUT" 2>&1)"; STUB_RC=$?
 set -e
 # Assert the CAUSE, not just the word UNKNOWN -- and the cause moved. The
 # version PRE-FLIGHT (guard in assertion-only mode) now rejects an unsupported
@@ -498,7 +503,7 @@ mkdir -p sub
 build_xlsx sub/deep.xlsx "API key: $SECRET"
 git add sub/deep.xlsx; git commit -qm "secret in a subdirectory" >/dev/null
 mkdir -p other
-if SUT_OUT="$( cd other && "$SUT" --tree HEAD 2>&1 )"; then SUT_RC=0; else SUT_RC=$?; fi
+if SUT_OUT="$( cd other && bash "$SUT" --tree HEAD 2>&1 )"; then SUT_RC=0; else SUT_RC=$?; fi
 if [ "$SUT_RC" -ne 0 ] && grep -qF "SECRET in sub/deep.xlsx" <<<"$SUT_OUT"; then
   ok "--tree scans the whole tree when run from a subdirectory"
 else bad "--tree run from a subdirectory missed the secret (rc=$SUT_RC)" "$SUT_OUT"; fi
@@ -536,7 +541,7 @@ STUB
   # "${a[@]}" on an empty array is an unbound-variable error under `set -u` there.
   sut_args=()
   [ "$mode" = tree ] && sut_args=(--tree HEAD)
-  if OUT="$(PATH="$WORK/gitstub-$mode:$PATH" "$SUT" "${sut_args[@]+"${sut_args[@]}"}" 2>&1)"; then
+  if OUT="$(PATH="$WORK/gitstub-$mode:$PATH" bash "$SUT" "${sut_args[@]+"${sut_args[@]}"}" 2>&1)"; then
     RC=0
   else RC=$?; fi
   if [ "$RC" -ne 0 ] && grep -q "could not enumerate" <<<"$OUT"; then

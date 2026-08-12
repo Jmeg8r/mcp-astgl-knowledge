@@ -80,7 +80,12 @@ trap 'rm -f "$records"' EXIT
 # `git cat-file -s` can be ambiguous in a large object store — failing (or worse,
 # resolving against a different object) for a reason that has nothing to do with
 # the file being sized. Full names cost nothing and remove the class.
-if ! git diff --cached -z --raw --no-abbrev --diff-filter=ACMRT > "$records"; then
+# --no-relative: this is NOT --name-only-specific. Under a user's diff.relative=true,
+# run from a subdirectory, --raw's path field is subset the same way --name-only's is
+# -- measured directly: files outside the subdirectory are omitted from the record
+# list entirely rather than erroring. This hook never cds to the repo root and is
+# invoked from wherever `git commit` was run, so nothing here controls that config.
+if ! git diff --cached --no-relative -z --raw --no-abbrev --diff-filter=ACMRT > "$records"; then
   echo "✗ could not enumerate staged files (git exited non-zero)"
   echo "    Refusing to report clean over an index this check could not read."
   exit 1

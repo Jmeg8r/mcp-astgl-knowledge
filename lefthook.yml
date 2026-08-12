@@ -242,8 +242,8 @@ pre-commit:
       # A bare `run:` does fail when the file is absent — but ANONYMOUSLY, as a shell
       # "no such file" naming neither the job nor what went unscanned. Name it.
       run: |
-        if [ ! -f scripts/scan-staged-binaries.sh ]; then
-          echo "✗ scripts/scan-staged-binaries.sh is missing — binaries in this commit are UNSCANNED"
+        if [ ! -f scripts/scan-staged-binaries.sh ] || [ ! -r scripts/scan-staged-binaries.sh ]; then
+          echo "✗ scripts/scan-staged-binaries.sh is missing or unreadable — binaries in this commit are UNSCANNED"
           echo "    This is not a clean result. Restore it from the kit:"
           echo "    10-repo-init.sh --path . --no-remote"
           exit 1
@@ -360,12 +360,12 @@ pre-commit:
       # four distinct ways in a single day and three of those were introduced while
       # fixing the previous one (#12) — an inline `run:` block cannot be exercised by
       # anything, so every version was validated by reading it, which is precisely
-      # how four wrong versions shipped. scripts/selftest-no-big-files.sh covers 17
+      # how four wrong versions shipped. scripts/selftest-no-big-files.sh covers 18
       # shapes including the ones that produced each historical defect.
       # Named absence, never a skip, for the reason at secrets-binaries above.
       run: |
-        if [ ! -f scripts/check-big-files.sh ]; then
-          echo "✗ scripts/check-big-files.sh is missing — large blobs are UNCHECKED"
+        if [ ! -f scripts/check-big-files.sh ] || [ ! -r scripts/check-big-files.sh ]; then
+          echo "✗ scripts/check-big-files.sh is missing or unreadable — large blobs are UNCHECKED"
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
         fi
@@ -622,8 +622,8 @@ pre-push:
       # absence rather than failing as a bare "no such file", and never skip.
       # `bash <script>` so a dropped execute bit is not itself a failure mode.
       run: |
-        if [ ! -f scripts/test-gitleaks-guard.sh ]; then
-          echo "✗ scripts/test-gitleaks-guard.sh is missing — the secret scanner is unverified"
+        if [ ! -f scripts/test-gitleaks-guard.sh ] || [ ! -r scripts/test-gitleaks-guard.sh ]; then
+          echo "✗ scripts/test-gitleaks-guard.sh is missing or unreadable — the secret scanner is unverified"
           echo "    A scanner nobody checks is how the binary blind spot survived."
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
@@ -692,8 +692,8 @@ pre-push:
         # by a passing --self-check — precisely the false green this job exists
         # to prevent.
         set -eu
-        if [ ! -f scripts/selftest-no-big-files.sh ]; then
-          echo "✗ scripts/selftest-no-big-files.sh is missing — the size gate is unverified"
+        if [ ! -f scripts/selftest-no-big-files.sh ] || [ ! -r scripts/selftest-no-big-files.sh ]; then
+          echo "✗ scripts/selftest-no-big-files.sh is missing or unreadable — the size gate is unverified"
           echo "    Restore it from the kit:  10-repo-init.sh --path . --no-remote"
           exit 1
         fi
@@ -715,8 +715,8 @@ pre-push:
         # secret-scan-selftest runs its script unconditionally; match it.
         # `bash <script>` rather than `./<script>` so a dropped execute bit is
         # not itself a failure mode.
-        if [ ! -f scripts/selftest-binary-scan.sh ]; then
-          echo "✗ scripts/selftest-binary-scan.sh is missing — the binary gate is unverified"
+        if [ ! -f scripts/selftest-binary-scan.sh ] || [ ! -r scripts/selftest-binary-scan.sh ]; then
+          echo "✗ scripts/selftest-binary-scan.sh is missing or unreadable — the binary gate is unverified"
           exit 1
         fi
         bash scripts/selftest-binary-scan.sh

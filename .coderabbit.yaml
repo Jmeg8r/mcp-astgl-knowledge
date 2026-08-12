@@ -135,6 +135,9 @@ reviews:
         ref. Require explicit least-privilege `permissions:` blocks. Flag missing
         `timeout-minutes` — a hung job burns Actions minutes during an outage.
         Flag secrets referenced in `run:` steps where an env block is safer.
+        Require workflow interpolations that reach shell commands to pass through
+        `env:` and quoted shell variables. Require semver validation before a
+        resolved version is used in an npm command or filename.
 
     - path: "**/*.sh"
       instructions: >
