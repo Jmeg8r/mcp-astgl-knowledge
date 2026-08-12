@@ -10,18 +10,19 @@
 
 ## Local gates
 
-<!-- Filled automatically by bin/ship.sh — leave as-is if you ran it. -->
+<!-- Tick what you ran. (An earlier revision claimed bin/ship.sh fills this in
+     automatically — no such script ships here; the checklist is hand-ticked.) -->
 
 - [ ] `lefthook run pre-commit` clean
 - [ ] `lefthook run pre-push` clean
-- [ ] `cr review --base main` covered this PR head and findings are addressed;
-      use a full review if it auto-pauses, reports `already reviewed commits`,
-      or current-HEAD coverage is uncertain
-      <!-- `main` is the executable default. If this PR targets a different
-           branch, substitute it: reviewing a release- or feature-branch PR
-           against main reports drift that is not this PR's diff, and misses
-           drift that is. -->
+- [ ] `lefthook run review` run and findings addressed
+      <!-- Runs `cr review --base "${CR_BASE:-main}"`. `main` is the default; on
+           a stacked PR set CR_BASE (`CR_BASE=release-2.0 lefthook run review`)
+           or the invocation reports drift that is not this PR's diff, and
+           misses drift that is. -->
 - [ ] `act` dry-run passed (if workflows changed)
+- [ ] CodeRabbit has reviewed the CURRENT head — re-request after every push;
+      a verdict on a stale commit is not a review of this PR
 
 ## Review focus
 

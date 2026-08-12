@@ -502,16 +502,12 @@ case "$MODE" in
     # the "no cd, every path resolved by git itself" property the rest of this file
     # relies on.
     git ls-tree --full-tree -r -z --name-only "$TREE_REF" > "$STAGED_LIST" ;;
-  *)
-    # Not reachable today: $MODE is constrained to staged/range/tree at argument
-    # parse time, and an earlier case already rejects anything else before this
-    # point. Kept anyway -- an unmatched `case` with no default returns 0, which
-    # would otherwise let a stale or empty $STAGED_LIST silently walk as "nothing
-    # staged" rather than reaching the `|| {...}` handler right below, the exact
-    # fail-open shape that handler exists to prevent for every OTHER failure in
-    # this block. `false`, not `exit`: this must FEED that handler, not bypass it
-    # -- exit here would print no message at all and skip its diagnostics.
-    false ;;
+  # Same argument as the BLOB_PREFIX case above, and the same arm it has: that
+  # $MODE is one of three literals is the parser's property, not this block's,
+  # and a fourth mode added later must fail HERE with a name -- not walk an empty
+  # list and report clean.
+  *) printf '\n✗ scan-staged-binaries: no enumeration source for mode: %s\n\n' "$MODE" >&2
+     exit 2 ;;
 esac || {
   # Fail closed on an enumeration that errored. With the loop fed straight from a
   # process substitution, a git that exits non-zero produced an EMPTY stream -- so
