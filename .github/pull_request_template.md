@@ -1,4 +1,4 @@
-# Pull request
+# Pull Request
 
 ## What changed
 
@@ -10,13 +10,19 @@
 
 ## Local gates
 
-<!-- Filled automatically by bin/ship.sh in repos that have it — otherwise
-     tick these by hand after running the commands. -->
+<!-- Tick what you ran. (An earlier revision claimed bin/ship.sh fills this in
+     automatically — no such script ships here; the checklist is hand-ticked.) -->
 
 - [ ] `lefthook run pre-commit` clean
 - [ ] `lefthook run pre-push` clean
-- [ ] `cr review --base main` run and findings addressed
+- [ ] `lefthook run review` run and findings addressed
+      <!-- Runs `cr review --base "${CR_BASE:-main}"`. `main` is the default; on
+           a stacked PR set CR_BASE (`CR_BASE=release-2.0 lefthook run review`)
+           or the invocation reports drift that is not this PR's diff, and
+           misses drift that is. -->
 - [ ] `act` dry-run passed (if workflows changed)
+- [ ] CodeRabbit has reviewed the CURRENT head — re-request after every push;
+      a verdict on a stale commit is not a review of this PR
 
 ## Review focus
 
@@ -28,5 +34,9 @@
 <!-- ASTGL pipeline: was there a decision point, aha moment, or course
      correction worth writing up? Note it here while it's fresh. -->
 
+**Tick exactly one.** If you tick the second, write the note on the same line —
+an empty "Captured" is indistinguishable from an unticked box, which is the
+thing this section exists to avoid.
+
 - [ ] Nothing to capture
-- [ ] Captured — note:
+- [ ] Captured — note: _(what the decision, aha, or course-correction was)_
