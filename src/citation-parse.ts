@@ -12,8 +12,7 @@
  *       over such a field goes through asArray() — see its WHY.
  */
 
-// WHAT: Hostname that counts as an ASTGL citation.
-// WHY:  Substring match, so both astgl.ai and www.astgl.ai are found.
+// WHAT: Hostname that counts as an ASTGL citation. Compared by isAstglUrl().
 const ASTGL_HOST = "astgl.ai";
 
 const SNIPPET_MAX_CHARS = 500;
@@ -44,7 +43,35 @@ export function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+// WHAT: True when a value can safely have properties read off it.
+// WHY:  asArray guards the container; this guards the MEMBERS. A `null` inside
+//       an otherwise valid array throws on the first property access
+//       (`block.type`), which is the same defect one level down — the container
+//       being an array says nothing about what the vendor put in it.
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 // --- Shared ---
+
+// WHAT: Decide whether one URL counts as an ASTGL citation.
+// WHY:  By HOSTNAME, not substring — `notastgl.ai` and
+//       `example.com/?target=astgl.ai` both contain the substring and would
+//       have written false-positive rows into test_results. The scheme-less
+//       retry exists because nothing guarantees an engine's citation strings
+//       carry a scheme, and in a series whose entire point is catching the
+//       first real citation, silently dropping one is the costlier error.
+function isAstglUrl(value: string): boolean {
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
+    ? value
+    : `https://${value}`;
+  try {
+    const hostname = new URL(candidate).hostname;
+    return hostname === ASTGL_HOST || hostname.endsWith(`.${ASTGL_HOST}`);
+  } catch {
+    return false;
+  }
+}
 
 // WHAT: Find the first ASTGL URL in an ordered citation list.
 // WHY:  Position is 1-indexed because it is reported to humans as "cited at
@@ -54,7 +81,7 @@ export function findAstglInUrls(urls: string[]): {
   position: number | null;
 } {
   for (let i = 0; i < urls.length; i++) {
-    if (urls[i].includes(ASTGL_HOST)) {
+    if (isAstglUrl(urls[i])) {
       return { citedUrl: urls[i], position: i + 1 };
     }
   }
@@ -94,7 +121,11 @@ export function parsePerplexity(data: unknown): QueryResult {
     (u): u is string => typeof u === "string"
   );
   const choices = asArray<PerplexityChoice>(body.choices);
-  return toResult(urls, choices[0]?.message?.content || "");
+  // WHY typeof, not ||: a numeric `content` is truthy, survives `|| ""`, and
+  //     then throws on .slice() in toResult. Optional chaining already makes
+  //     null/primitive choices safe; the FIELD's type is the remaining hole.
+  const content = choices[0]?.message?.content;
+  return toResult(urls, typeof content === "string" ? content : "");
 }
 
 // --- Claude ---
@@ -153,21 +184,32 @@ export function parseClaude(data: unknown): QueryResult {
   let searchesFailed = 0;
   let firstErrorCode: string | null = null;
 
+  // WHY isRecord on every member and typeof on every leaf: asArray only proves
+  //     the CONTAINER is an array. A null member throws on `block.type`; a
+  //     numeric `url` survives a truthiness check and throws inside URL parsing;
+  //     a numeric `text` coerces into the snippet. Same defect class, one level
+  //     down — validate the record, then the field.
   for (const block of asArray<ClaudeBlock>(body.content)) {
-    if (block.type === "text" && block.text) {
+    if (!isRecord(block)) continue;
+    if (block.type === "text" && typeof block.text === "string") {
       textOut += block.text;
       for (const c of asArray<ClaudeCitation>(block.citations)) {
-        if (c.url) urls.push(c.url);
+        if (isRecord(c) && typeof c.url === "string") urls.push(c.url);
       }
     } else if (block.type === "web_search_tool_result") {
       if (Array.isArray(block.content)) {
         searchesOk++;
         for (const r of block.content) {
-          if (r.url) urls.push(r.url);
+          if (isRecord(r) && typeof r.url === "string") urls.push(r.url);
         }
       } else if (block.content) {
         searchesFailed++;
-        firstErrorCode ??= block.content.error_code ?? "unknown";
+        if (firstErrorCode === null) {
+          const code = isRecord(block.content)
+            ? block.content.error_code
+            : undefined;
+          firstErrorCode = typeof code === "string" ? code : "unknown";
+        }
       }
     }
   }
@@ -225,12 +267,20 @@ export function parseChatGPT(data: unknown): QueryResult {
   const urls: string[] = [];
   let textOut = "";
 
+  // WHY isRecord/typeof on members and leaves: see the same comment in
+  //     parseClaude — the container being an array proves nothing about what
+  //     the vendor put in it.
   for (const item of asArray<ChatGPTItem>(body.output)) {
-    if (item.type !== "message") continue;
+    if (!isRecord(item) || item.type !== "message") continue;
     for (const c of asArray<ChatGPTContent>(item.content)) {
-      if (c.type === "output_text" && c.text) textOut += c.text;
+      if (!isRecord(c)) continue;
+      if (c.type === "output_text" && typeof c.text === "string") {
+        textOut += c.text;
+      }
       for (const a of asArray<ChatGPTAnnotation>(c.annotations)) {
-        if (a.type === "url_citation" && a.url) urls.push(a.url);
+        if (isRecord(a) && a.type === "url_citation" && typeof a.url === "string") {
+          urls.push(a.url);
+        }
       }
     }
   }

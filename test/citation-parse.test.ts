@@ -81,15 +81,16 @@ test("the error fixture reproduces the TypeError recorded in citation-test.db", 
     },
     (err: unknown) => {
       assert.ok(err instanceof TypeError, `expected TypeError, got ${err}`);
-      assert.ok(
-        err.message.includes("is not iterable"),
-        `expected an "is not iterable" TypeError, got: ${err.message}`
-      );
+      // WHY equality, not a substring: the test's whole claim is that this
+      //     fixture reproduces the VERBATIM message from citation-test.db. A
+      //     substring match would keep passing if V8 reworded the message or
+      //     the replay stopped naming block.content — and comparing the
+      //     constant against itself (the previous "sanity check") verified
+      //     nothing at all.
+      assert.equal(err.message, OBSERVED_ERROR);
       return true;
     }
   );
-  // Sanity-check the message the production code would have produced.
-  assert.ok(OBSERVED_ERROR.includes("is not iterable"));
 });
 
 test("parseClaude survives a search error when another search succeeded", () => {
@@ -175,6 +176,77 @@ test("parseClaude tolerates non-array content and citations", () => {
   });
   assert.equal(result.cited, false);
   assert.equal(result.snippet, "hi");
+});
+
+test("parsers tolerate malformed MEMBERS, not just malformed containers", () => {
+  // WHY: the container being an array proves nothing about its members. A null
+  //      block threw on `block.type`; a numeric url reached URL parsing; a
+  //      numeric text coerced into the snippet. Same class, one level down.
+  const claude = parseClaude({
+    content: [
+      null,
+      42,
+      "stray string",
+      { type: "text", text: 123 },
+      { type: "text", text: "real text.", citations: [null, { url: 99 }] },
+      {
+        type: "web_search_tool_result",
+        content: [null, { url: 7 }, { url: "https://astgl.ai/ok" }],
+      },
+    ],
+  });
+  assert.equal(claude.cited, true);
+  assert.equal(claude.citedUrl, "https://astgl.ai/ok");
+  assert.equal(claude.snippet, "real text.");
+
+  const chatgpt = parseChatGPT({
+    output: [
+      null,
+      { type: "message", content: [null, { type: "output_text", text: 5 }] },
+      {
+        type: "message",
+        content: [
+          {
+            type: "output_text",
+            text: "ok.",
+            annotations: [null, { type: "url_citation", url: 3 }],
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(chatgpt.cited, false);
+  assert.equal(chatgpt.snippet, "ok.");
+
+  // Numeric Perplexity content is truthy — `|| ""` would pass it to .slice().
+  const perplexity = parsePerplexity({
+    citations: [],
+    choices: [{ message: { content: 42 } }],
+  });
+  assert.equal(perplexity.snippet, null);
+});
+
+test("citation matching is by hostname, not substring", () => {
+  // WHY: `notastgl.ai` and a query-string mention both CONTAIN the substring;
+  //      counting either writes a false-positive citation into test_results.
+  assert.deepEqual(findAstglInUrls(["https://notastgl.ai/post"]), {
+    citedUrl: null,
+    position: null,
+  });
+  assert.deepEqual(
+    findAstglInUrls(["https://example.com/?target=astgl.ai"]),
+    { citedUrl: null, position: null }
+  );
+  assert.deepEqual(findAstglInUrls(["https://example.com/astgl.ai/mirror"]), {
+    citedUrl: null,
+    position: null,
+  });
+  // Subdomains still count…
+  assert.equal(findAstglInUrls(["https://sub.astgl.ai/x"]).position, 1);
+  // …and a scheme-less citation is not dropped: in a series whose point is
+  // catching the first real citation, a missed hit is the costlier error.
+  assert.equal(findAstglInUrls(["astgl.ai/mcp-guide"]).position, 1);
+  assert.equal(findAstglInUrls(["www.astgl.ai/x"]).position, 1);
 });
 
 test("parseChatGPT tolerates non-array output, content and annotations", () => {
