@@ -668,15 +668,6 @@ export function getIdeas(
   }));
 }
 
-export function getIdeaCountByStatus(
-  database: InstanceType<typeof Database>
-): Record<string, number> {
-  const rows = database
-    .prepare("SELECT status, COUNT(*) as count FROM ideas GROUP BY status")
-    .all() as Array<{ status: string; count: number }>;
-  return Object.fromEntries(rows.map((r) => [r.status, r.count]));
-}
-
 export function closeKnowledgeDb(): void {
   if (db) {
     db.close();

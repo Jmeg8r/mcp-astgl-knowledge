@@ -147,11 +147,6 @@ function injectRelatedFrontmatter(
   let frontmatter = fmMatch[1];
   const body = fmMatch[2];
 
-  // Remove existing `related:` block if present
-  frontmatter = frontmatter.replace(
-    /related:\n(?:- slug:[\s\S]*?(?=\n\w|\n---|\z))/g,
-    ""
-  );
   // Cleaner regex: remove the related block entirely
   frontmatter = frontmatter.replace(
     /related:\n(?:(?:- (?:slug|title):.*\n|  .*\n)*)/g,

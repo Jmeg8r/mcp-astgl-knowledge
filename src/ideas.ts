@@ -5,7 +5,6 @@
  * WHY: Surfaces content gaps and trending topics to drive article creation
  */
 
-import { join } from "path";
 import { existsSync } from "fs";
 import {
   resolveKnowledgeDbPath,
