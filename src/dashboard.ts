@@ -15,11 +15,11 @@ import { join } from "path";
 import { existsSync, writeFileSync } from "fs";
 import Database from "better-sqlite3";
 import type { DashboardData } from "./types.js";
-import { resolveQueryLogDbPath } from "./db-path.js";
+import { resolveKnowledgeDbPath, resolveQueryLogDbPath } from "./db-path.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const QUERY_LOG_PATH = resolveQueryLogDbPath();
-const KNOWLEDGE_PATH = join(DATA_DIR, "knowledge.db");
+const KNOWLEDGE_PATH = resolveKnowledgeDbPath();
 
 function parseArgs(): { days: number; outputFile: boolean } {
   const args = process.argv.slice(2);
