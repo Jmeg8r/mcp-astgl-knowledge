@@ -52,7 +52,6 @@ interface AlertReport {
   generated_at: string;
   period_days: number;
   alerts_fired: Alert[];
-  alerts_suppressed: number;
   checks_run: string[];
 }
 
@@ -501,7 +500,6 @@ async function main() {
 
   const alertDb = initAlertDb();
   const checksRun: string[] = [];
-  let suppressed = 0;
   const allAlerts: Alert[] = [];
 
   // Run all checks
@@ -537,7 +535,6 @@ async function main() {
     generated_at: new Date().toISOString(),
     period_days: days,
     alerts_fired: allAlerts,
-    alerts_suppressed: suppressed,
     checks_run: checksRun,
   };
 
@@ -549,9 +546,7 @@ async function main() {
     console.error("No alerts to send.");
   }
 
-  console.error(
-    `\n=== Done: ${allAlerts.length} alert(s) fired, ${suppressed} suppressed ===`
-  );
+  console.error(`\n=== Done: ${allAlerts.length} alert(s) fired ===`);
 }
 
 main()

@@ -89,7 +89,6 @@ interface Alert {
 interface FreshnessReport {
   generated_at: string;
   alerts_fired: Alert[];
-  alerts_suppressed: number;
   checks_run: string[];
   checks_skipped: string[];
   ecosystem_versions: Array<{ package: string; version: string; type: string }>;
@@ -710,7 +709,6 @@ async function main() {
   const report: FreshnessReport = {
     generated_at: new Date().toISOString(),
     alerts_fired: allAlerts,
-    alerts_suppressed: 0,
     checks_run: checksRun,
     checks_skipped: ALL_CHECKS.filter((c) => !checks.has(c)),
     ecosystem_versions: ecosystemVersions,
