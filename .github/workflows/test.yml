@@ -58,6 +58,16 @@ jobs:
       - name: Install
         run: npm ci
 
+      # WHY: nothing in CI looked at npm advisories here; the 2026-09-19 Next.js RCE
+      #      advisories sat live across the fleet because only one repository of 31
+      #      gated on npm audit. Production tree only (--omit=dev), high and above:
+      #      this is a Node server whose production dependencies are what it runs
+      #      (140 of 220 packages), and dev-tree advisories do not ship. It fires on
+      #      an UNCHANGED lockfile when a new advisory lands, because npm audit reads
+      #      a moving database rather than the diff. That is the point.
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
       # WHY: tsc strict is the repo's only type gate. Run it before the tests so a
       #      compile error is reported as a compile error rather than surfacing as a
       #      confusing runtime failure inside the suite.
