@@ -2,7 +2,9 @@
 
 An MCP server that lets AI assistants search and cite content from [As The Geek Learns](https://astgl.ai) — covering MCP servers, local AI, AI automation, and ASTGL project documentation.
 
-When an AI assistant connects to this server, it gains access to 49 indexed entries (articles, tutorials, comparisons, guides, and project docs). Every response includes source URLs back to astgl.ai.
+When an AI assistant connects to this server, it can search the indexed ASTGL entries (articles, tutorials, comparisons, guides, and project docs). Search results include source URLs back to astgl.ai.
+
+> **Requirement:** the semantic tools (`search_articles`, `get_answer`, `get_tutorial`, `compare_topics`) embed your query at runtime with a local [Ollama](https://ollama.com) running `nomic-embed-text` (default `http://localhost:11434`). The metadata tools (`find_articles`, `list_tags`, `list_topics`, `get_latest`) work without Ollama.
 
 ## Quick Start
 
@@ -125,17 +127,38 @@ Register your email to unlock 500 queries/day (up from 50).
 |-----------|------|----------|-------------|
 | `email` | string | Yes | Your email address |
 
+### More tools
+
+The server registers 17 tools in total. The others:
+
+| Tool | What it does | Main parameters |
+|------|--------------|-----------------|
+| `find_articles` | Structured lookup by tag, type, title text and date range (no embeddings) | `tag`, `content_type`, `title`, `date_from`, `date_to` |
+| `list_tags` | Every tag with its article count | — |
+| `suggest_ideas` | Topic suggestions from query analytics (gaps, low-confidence queries) | `days` (default 7), `limit` |
+| `add_idea` / `list_ideas` / `export_ideas` | Idea journal stored alongside the index | `title`, `description`, `status`, `priority`, `source` |
+| `export_article` | One article as a markdown post | `url` |
+| `export_topic_roundup` | Roundup post from related articles | `topic`, `limit` |
+| `export_qa_compilation` | FAQ-style markdown from article Q&A pairs | `topic`, `limit` |
+| `generate_dashboard_data` | JSON analytics snapshot (optionally written to `data/dashboard.json`) | `days` (default 30), `output_file` |
+
 ## Content Types
 
-| Type | Count | Description |
-|------|-------|-------------|
-| article | 29 | Informational content about MCP, local AI, automation |
-| project | 9 | ASTGL project documentation (KlockThingy, Revri, Cortex, etc.) |
-| tutorial | 8 | Step-by-step how-to guides |
-| comparison | 2 | Side-by-side topic analysis |
-| guide | 1 | Comprehensive reference material |
-| newsletter | — | Personal updates and announcements |
-| faq | — | Primarily Q&A content |
+| Type | Description |
+|------|-------------|
+| article | Informational content about MCP, local AI, automation |
+| project | ASTGL project documentation |
+| tutorial | Step-by-step how-to guides |
+| comparison | Side-by-side topic analysis |
+| guide | Comprehensive reference material |
+| newsletter | Personal updates and announcements |
+| faq | Primarily Q&A content |
+| concept | Wiki concept pages (only allowlisted pages are public) |
+| entity | Wiki entity pages (only allowlisted pages are public) |
+
+Counts change as content is added; call `list_topics` or `list_tags` for the current index.
+`draft` and `synthesis` entries exist only in the maintainer database and are removed from the
+published one. The `content_type` descriptions in the tool schemas list only the first seven types.
 
 ## Rate Limits
 
@@ -146,11 +169,15 @@ Register your email to unlock 500 queries/day (up from 50).
 
 Limits reset at midnight UTC. Rate limit info is included in every response.
 
+Limits and registrations are enforced by the server process itself: usage and registrations are kept in a local SQLite file (`data/query-log.db` next to the package, or `ASTGL_QUERY_LOG_DB`), and anonymous clients get a persistent ID in `~/.astgl-client-id`. An `ASTGL_API_KEY` only counts as registered if it exists in that local registrations table.
+
 ## How It Works
 
 The knowledge base is pre-built from ASTGL articles using semantic embeddings (nomic-embed-text, 768 dimensions). Content is chunked by section and FAQ entry, embedded, and stored in a SQLite database with sqlite-vec for vector similarity search.
 
-**End users don't need Ollama** — all embeddings are pre-computed and shipped in the npm package. The only runtime requirement is Node.js.
+Article embeddings are pre-computed and shipped in the npm package, so you never re-index content. Your **query** is still embedded at runtime through Ollama for the semantic tools (see the requirement above).
+
+The server opens `data/knowledge.db` when it exists (a maintainer checkout) and otherwise `build/knowledge-public.db`. The npm package ships only `build/knowledge-public.db`, which `npm run build-public-db` produces by physically removing every non-public row (see `docs/adr/`).
 
 ### Performance
 
@@ -189,6 +216,9 @@ npm install
 | `npm run publish-drift` | Compare local publishable content against what npm actually serves |
 | `npm run citation-test` | Manual AI citation testing |
 | `npm run related` | Generate internal article links via vector similarity |
+| `npm run build-public-db` | Write `build/knowledge-public.db` with non-public rows removed (runs in `prepack`) |
+
+Other maintainer scripts (draft ingest and reconcile, rewrite queue, wiki sync, backup pruning, dashboard data, MCPB bundle) are listed in `package.json`.
 
 ### Environment Variables
 
@@ -200,15 +230,40 @@ npm install
 | `ASTGL_API_KEY` | — | Registered tier API key |
 | `ASTGL_ARTICLES_DIR` | `~/Projects/astgl-site/src/content/answers` | Local markdown source |
 | `ASTGL_PROJECTS_JSON` | `~/Projects/astgl-site/src/data/projects.json` | Projects data source |
+| `ASTGL_QUERY_LOG_DB` | `data/query-log.db` | Query log, rate limits and registrations |
+| `ASTGL_CITATION_TEST_DB` | `data/citation-test.db` | Citation test results |
 
 ### Automated Jobs
 
 | Job | Schedule | Purpose |
 |-----|----------|---------|
 | Content pipeline | Every 6h | Discover + structure new content |
-| Daily report | 8 AM | Query analytics + health metrics → Discord |
-| Content alerts | 9 AM | Gap detection, zero-citation, competitor scan → Discord |
-| Freshness check | 10 AM | Stale content + ecosystem version tracking → Discord |
+| Daily report | 8 AM | Query analytics + health metrics (JSON report) |
+| Content alerts | 9 AM | Gap detection, zero-citation, competitor scan (JSON report) |
+| Freshness check | 10 AM | Stale content + ecosystem version tracking (JSON report) |
+| Draft pipeline | Midnight | Index pre-publication drafts |
+| Wiki sync | 00:30 | Incremental sync of tagged wiki pages into the index |
+| Draft reconciler | 2 AM | Retire draft entries whose source is gone |
+| Citation testing reminder | Mondays 9 AM | Reminder to run citation tests |
+
+Schedules are defined in `cron/*.json`; the scheduled report jobs print JSON that an external scheduler picks up and delivers. Run the report scripts with `--discord` to post to `DISCORD_WEBHOOK_URL` instead. macOS launchd plists for the pipeline, draft and wiki jobs are in `launchd/`.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Client["MCP client<br/>(Claude, Cursor, ...)"] -->|"stdio"| Server["MCP server<br/>src/index.ts (17 tools)"]
+    Server --> RL["Rate limit + query log<br/>data/query-log.db"]
+    Server --> Search["src/search.ts"]
+    Search -->|"embed query"| Ollama["Ollama<br/>nomic-embed-text"]
+    Search -->|"sqlite-vec KNN"| KDB[("knowledge.db<br/>or knowledge-public.db")]
+    Sources["astgl.ai RSS / sitemap<br/>+ local markdown"] -->|"discover, structure, ingest"| KDB
+    KDB -->|"build-public-db"| Pub[("build/knowledge-public.db<br/>(shipped in npm)")]
+    Jobs["Report jobs<br/>daily report, alerts, freshness"] -.->|"--discord (manual)"| Discord["Discord webhook"]
+```
+
+A rendered diagram is in [`docs/diagrams/mcp-astgl-knowledge.architecture.svg`](docs/diagrams/mcp-astgl-knowledge.architecture.svg)
+(source: `docs/diagrams/mcp-astgl-knowledge.architecture.json`).
 
 ## License
 
