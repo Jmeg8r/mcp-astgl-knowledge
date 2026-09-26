@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "mcp-astgl-knowledge \u2014 ASTGL knowledge base over MCP",
+    "output": "mcp-astgl-knowledge.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "query",
+        "label": "Semantic query",
+        "focus": [
+          "client",
+          "server",
+          "rl",
+          "qlog",
+          "search",
+          "ollama",
+          "kdb"
+        ],
+        "note": "Each tool call checks the local rate limit, embeds the query with Ollama and runs a sqlite-vec search."
+      },
+      {
+        "id": "index",
+        "label": "Indexing",
+        "focus": [
+          "sources",
+          "pipeline",
+          "ollama",
+          "kdb",
+          "pub"
+        ],
+        "note": "Maintainer jobs discover and embed content into knowledge.db; build-public-db strips non-public rows for npm."
+      },
+      {
+        "id": "ops",
+        "label": "Reports",
+        "focus": [
+          "jobs",
+          "discord",
+          "pipeline"
+        ],
+        "note": "Report jobs print JSON for an external scheduler; run manually with --discord to post to a webhook."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "MCP client",
+      "sublabel": "Claude, Cursor, ...",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "rl",
+      "type": "security",
+      "label": "Rate limiter",
+      "sublabel": "50 / 500 per day",
+      "pos": [
+        250,
+        80
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "server",
+      "type": "backend",
+      "label": "MCP server",
+      "sublabel": "index.ts, 17 tools",
+      "pos": [
+        250,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "tag": "stdio"
+    },
+    {
+      "id": "qlog",
+      "type": "database",
+      "label": "query-log.db",
+      "sublabel": "usage + registrations",
+      "pos": [
+        460,
+        80
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "search",
+      "type": "backend",
+      "label": "search.ts",
+      "sublabel": "vector + metadata",
+      "pos": [
+        460,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "ollama",
+      "type": "external",
+      "label": "Ollama",
+      "sublabel": "nomic-embed-text",
+      "pos": [
+        460,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "kdb",
+      "type": "database",
+      "label": "knowledge.db",
+      "sublabel": "sqlite-vec, 768-dim",
+      "pos": [
+        670,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "pub",
+      "type": "database",
+      "label": "knowledge-public.db",
+      "sublabel": "shipped in npm",
+      "pos": [
+        880,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Ingest pipeline",
+      "sublabel": "discover, structure, ingest",
+      "pos": [
+        670,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "sources",
+      "type": "external",
+      "label": "Content sources",
+      "sublabel": "astgl.ai feeds, markdown",
+      "pos": [
+        880,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "jobs",
+      "type": "backend",
+      "label": "Report jobs",
+      "sublabel": "JSON reports",
+      "pos": [
+        670,
+        500
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "discord",
+      "type": "external",
+      "label": "Discord",
+      "sublabel": "webhook",
+      "pos": [
+        880,
+        500
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "tag": "manual"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Server process",
+      "wraps": [
+        "rl",
+        "server",
+        "search"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Maintainer tooling",
+      "wraps": [
+        "pipeline",
+        "jobs"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-server",
+      "from": "client",
+      "to": "server",
+      "label": "tool call",
+      "variant": "emphasis"
+    },
+    {
+      "id": "server-rl",
+      "from": "server",
+      "to": "rl",
+      "label": "check",
+      "variant": "security"
+    },
+    {
+      "id": "rl-qlog",
+      "from": "rl",
+      "to": "qlog",
+      "label": "count"
+    },
+    {
+      "id": "server-search",
+      "from": "server",
+      "to": "search",
+      "variant": "emphasis"
+    },
+    {
+      "id": "search-ollama",
+      "from": "search",
+      "to": "ollama",
+      "label": "embed query",
+      "labelDy": 24
+    },
+    {
+      "id": "search-kdb",
+      "from": "search",
+      "to": "kdb",
+      "label": "KNN",
+      "variant": "emphasis"
+    },
+    {
+      "id": "kdb-pub",
+      "from": "kdb",
+      "to": "pub",
+      "label": "prune",
+      "variant": "dashed"
+    },
+    {
+      "id": "sources-pipeline",
+      "from": "sources",
+      "to": "pipeline",
+      "label": "fetch"
+    },
+    {
+      "id": "pipeline-ollama",
+      "from": "pipeline",
+      "to": "ollama",
+      "label": "embed"
+    },
+    {
+      "id": "pipeline-kdb",
+      "from": "pipeline",
+      "to": "kdb"
+    },
+    {
+      "id": "jobs-discord",
+      "from": "jobs",
+      "to": "discord",
+      "label": "--discord",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Tools",
+      "items": [
+        "Semantic: search, answer, tutorial, compare",
+        "Metadata: find_articles, list_tags, latest",
+        "Idea journal, exports, dashboard data"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Rate limits",
+      "items": [
+        "50/day anonymous, 500/day registered",
+        "Enforced locally in query-log.db",
+        "Anonymous ID in ~/.astgl-client-id"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Runtime needs",
+      "items": [
+        "Node.js plus a local Ollama",
+        "Query embeddings cached (LRU, 200)",
+        "10s Ollama timeout with one retry"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Publishing",
+      "items": [
+        "npm ships build/knowledge-public.db",
+        "prepack rebuilds the public DB",
+        "Non-public rows are removed, not hidden"
+      ]
+    }
+  ]
+}
