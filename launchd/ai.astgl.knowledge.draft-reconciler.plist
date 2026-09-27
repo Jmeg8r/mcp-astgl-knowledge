@@ -32,8 +32,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/draft-reconciler.log</string>
+    <string>/Users/jamescruce/Library/Logs/mcp-astgl-knowledge/draft-reconciler.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jamescruce/Projects/mcp-astgl-knowledge/logs/draft-reconciler.err.log</string>
+    <string>/Users/jamescruce/Library/Logs/mcp-astgl-knowledge/draft-reconciler.err.log</string>
   </dict>
 </plist>

@@ -13,8 +13,15 @@ repo. These copies exist so:
 
 ## Install / re-install
 
+The four installed jobs write logs under `~/Library/Logs/mcp-astgl-knowledge/`.
+Create that directory before installing a plist. The repository may live on an
+external volume: launchd was unable to open its stdout/stderr paths there after
+the September 2026 move, even though the Node job could write normal data files.
+Installing or booting out jobs requires James's approval under `CLAUDE.md`.
+
 ```bash
-# 1. Copy into LaunchAgents
+# 1. Prepare the home-volume log directory and copy into LaunchAgents
+mkdir -p ~/Library/Logs/mcp-astgl-knowledge
 cp launchd/ai.astgl.knowledge.content-pipeline.plist \
    ~/Library/LaunchAgents/
 
@@ -24,12 +31,14 @@ launchctl bootout gui/$(id -u) \
 launchctl bootstrap gui/$(id -u) \
   ~/Library/LaunchAgents/ai.astgl.knowledge.content-pipeline.plist
 
-# 3. Smoke-test by triggering a fire immediately
-launchctl kickstart -k gui/$(id -u)/ai.astgl.knowledge.content-pipeline
-
-# 4. Watch the result
-tail -f logs/content-pipeline.err.log
+# 3. Confirm registration; inspect the next real scheduled run
+launchctl print gui/$(id -u)/ai.astgl.knowledge.content-pipeline
+tail -f ~/Library/Logs/mcp-astgl-knowledge/content-pipeline.err.log
 ```
+
+The content and draft jobs mutate live indexes. Do not kickstart them merely
+to manufacture acceptance after a plist change. Keep the old repository logs
+as historical evidence until retention is decided separately.
 
 ## What's in here
 
