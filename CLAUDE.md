@@ -43,6 +43,11 @@ Search is 100% vector KNN — there is no FTS table.
 - **launchd runs everything.** Plists live in `launchd/` (installed copies in
   `~/Library/LaunchAgents/`). Repo-tracked jobs: content-pipeline (00/06/12/18h),
   draft-pipeline (00:00), wiki-sync (00:30), draft-reconciler (02:00).
+  Their stdout/stderr now go to `~/Library/Logs/mcp-astgl-knowledge/`, on the
+  home volume. The September 2026 external-volume move left launchd unable to
+  open log paths inside the repository (`EX_CONFIG`), although Node could still
+  write ordinary data files there. Create the home log directory before
+  installing the plists; leave historical repo logs intact.
 - **`cron/*.json` files are NOT crontab entries.** The crontab is empty. They are
   descriptor/runbook files consumed by MAESTER. Editing them changes nothing about
   when code runs.
@@ -384,9 +389,9 @@ became `src/prune-backups.ts` (see *Backup retention*).
 - [ ] Tested on a **copy** of the production DB (`cp data/knowledge.db /tmp/…` — copy the `-wal`/`-shm` sidecars too if present), not on the live file.
 
 **New scheduled job:**
-- [ ] Script meets the pipeline bar above; plist pins the nvm PATH, sets WorkingDirectory, routes stdout/stderr to `logs/<name>.log`/`.err.log` (gitignored).
+- [ ] Script meets the pipeline bar above; plist pins the nvm PATH, sets WorkingDirectory, routes stdout/stderr to `~/Library/Logs/mcp-astgl-knowledge/<name>.log`/`<name>.err.log` on the home volume.
 - [ ] Matching `cron/<name>.json` descriptor written for MAESTER.
-- [ ] Installed via bootout/bootstrap; smoke-tested with `launchctl kickstart -k` and the log tail pasted into the PR.
+- [ ] Installed via bootout/bootstrap; non-stateful jobs may be smoke-tested with `launchctl kickstart -k`. For stateful indexers/reconcilers, verify registration and the next real calendar fire instead of replaying effects; include the log evidence in the PR or follow-up.
 - [ ] Runs against `dist/` (built), not `tsx`.
 
 **PR (Ironclad Phase 4 applies — see global CLAUDE.md):**
