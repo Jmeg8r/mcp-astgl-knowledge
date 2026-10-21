@@ -1,6 +1,6 @@
 # Known drift (dated log)
 
-<!-- WHAT: Drift observations with the dates they were verified. Fix opportunistically, never trust; struck-through entries are resolved. The v1.1.0/v1.2.0 line is resolved: package.json, server.json and mcpb/manifest.json all read 1.3.1 on 2026-10-20.
+<!-- WHAT: Drift observations with the dates they were verified. Fix opportunistically, never trust; struck-through entries are resolved. The v1.1.0/v1.2.0 line is resolved: package.json, server.json and mcpb/manifest.json all read 1.3.1 on 2026-10-20. The ASTGL_DRAFTS_DIR line is resolved too: ingest-drafts, reconcile-drafts and rewrite-queue share one default on that date.
      Moved out of CLAUDE.md on 2026-10-20 (docs/trim-claude-md); the rules it supports stay there.
      WHY: CLAUDE.md is resent every turn; this is read by hand when the topic comes up. -->
 

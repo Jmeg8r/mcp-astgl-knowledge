@@ -167,13 +167,16 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 
 ## Quality bar — checkable, per deliverable
 
-- **Any code change:** `npm run build` (tsc strict, the only type check) **and `npm test`**
-  (node:test via tsx; `test/` sits outside `tsconfig` `rootDir`) both pass; there is no
-  linter. WHAT/WHY comments, named constants; every new `fetch` timed out; every
+- **Any code change:** `npm run build` (tsc strict) **and `npm test`** (node:test via tsx;
+  `test/` sits outside `tsconfig` `rootDir`) both pass; CI asserts both. No TypeScript linter
+  is configured (no lint script); lefthook still lints shell, YAML and workflows on commit
+  and runs `typecheck-node` + `tests-node` on push, so a fresh worktree needs `npm ci` first. WHAT/WHY comments, named constants; every new `fetch` timed out; every
   multi-table write in a transaction; stdout/stderr contract intact (grep your diff for
   `console.log` outside the summary line); defect class swept (Mistake #13); verified
   against the runtime production uses, with the verification stated in the PR.
-- **Pipeline script:** `--dry-run` if it can delete or mutate; idempotent; mount/dependency
+- **Pipeline script:** `--dry-run` if it can delete or mutate, and its output names the
+  exact rows/files affected; any script that can delete >0 rows prints what it will delete
+  under `--dry-run` before a live run is offered; idempotent; mount/dependency
   guards for anything under `/Volumes` or sibling repos, skip-vs-fail chosen deliberately
   (optional → exit 0 `skipped:true`; destructive prerequisite missing → exit 1); single JSON
   summary with counts for every branch; a fully-failed run records nothing and exits 1.
@@ -189,11 +192,13 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 - **New scheduled job:** meets the pipeline bar; plist pins the nvm PATH, sets
   WorkingDirectory, logs to `~/Library/Logs/mcp-astgl-knowledge/<name>.log` /
   `<name>.err.log`; matching `cron/<name>.json` descriptor; installed via
-  bootout/bootstrap and smoke-tested with `kickstart -k` (stateful indexers: verify
-  registration and the next real calendar fire instead); runs against `dist/`.
-- **PR (Ironclad applies; see global CLAUDE.md):** body states what changed, how it was
-  verified (command + observed output) and any deviation; every review thread implemented
-  or answered-and-resolved; `/gstack-cso` for anything touching the public tool surface,
+  bootout/bootstrap; non-stateful jobs may be smoke-tested with `kickstart -k`, but stateful
+  indexers and reconcilers are never replayed: verify registration and the next real
+  calendar fire, and include the log evidence in the PR or follow-up; runs against `dist/`.
+- **PR (Ironclad applies; see global CLAUDE.md):** branch, conventional commits, atomic;
+  no `--no-verify`; body states what changed, how it was verified (command + observed
+  output) and any deviation; every review thread implemented or answered-and-resolved
+  before merge; `/gstack-cso` for anything touching the public tool surface,
   rate limiting, or secrets.
 
 ## When uncertain — escalation rules
@@ -238,7 +243,8 @@ actual data before designing anything (`tasks/lessons.md`).
   is compared against `main`; the workflow runs only on dispatch and release.
 - **Backups** — `docs/backup-retention.md`: schema age, not calendar age, is the expiry.
 - **Known drift** — `docs/known-drift.md` (dated; fix opportunistically, never trust).
-  Standing items: set `ASTGL_DRAFTS_DIR` explicitly, the defaults diverge between scripts;
+  Standing items: set `ASTGL_DRAFTS_DIR` explicitly (the historical default divergence is
+  resolved: `ingest-drafts`, `reconcile-drafts` and `rewrite-queue` now share one default);
   `overrides: { tmp }` in package.json is a workaround to remove once mcpb's chain allows
   tmp ≥ 0.2.6 (check with `npm audit`, not version numbers); Asana is retired here.
 
