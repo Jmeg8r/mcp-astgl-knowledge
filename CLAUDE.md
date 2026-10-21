@@ -70,16 +70,17 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 
 ## Conventions — follow these exactly; do not "improve" them
 
-- **Comments**: `// WHAT:` + `// WHY:` pairs on every non-obvious function/module; section
-  banners `// --- Section ---`. **Constants**: `SCREAMING_SNAKE_CASE` at module top, no
+- **Comments**: `// WHAT:` + `// WHY:` pairs on every non-obvious function/module; the WHY
+  states the non-obvious reason. Section banners `// --- Section ---`. **Constants**: `SCREAMING_SNAKE_CASE` at module top, no
   magic numbers inline.
 - **Paths**: `join(import.meta.dirname, "..", ...)`; never `process.cwd()`, never `~`.
-- **Env**: `process.env.X || "default"` at module top; new vars get a placeholder entry in
-  `.env.example`, never a real value. **CLI args**: hand-rolled `process.argv` scanning; no
+- **Env**: `process.env.X || "default"` at module top; new vars get a documented entry in
+  `.env.example` (placeholder only, never a real value). **CLI args**: hand-rolled `process.argv` scanning; no
   arg-parsing dependency.
 - **Output contract (scripts)**: progress and errors → stderr; exactly ONE final
   `console.log(JSON.stringify(summary))` on stdout, which schedulers and MAESTER parse.
-  Exit `0` on success, `1` on fatal.
+  Exit `0` on success, `1` on fatal, via the
+  `.then(() => process.exit(0)).catch(err => { console.error(...); process.exit(1); })` pattern.
 - **Output contract (MCP server path)**: `index.ts` and everything it imports may NEVER
   write to stdout — stdout is the MCP stdio protocol. stderr only.
 - **DB access**: readers open `{ readonly: true }`; analytics scripts guard with `existsSync`
