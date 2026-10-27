@@ -10,6 +10,18 @@ useDefault = true   # inherit gitleaks' full built-in ruleset
 # ---------------------------------------------------------------------------
 # Additional rules for the things you actually handle
 # ---------------------------------------------------------------------------
+#
+# A custom rule ID that collides with one of gitleaks' OWN built-in rule IDs does not
+# add a second rule -- [extend] merges the two under one ID. Regex/description/entropy/
+# secretGroup are REPLACED by the custom rule's values, but Keywords are only ever
+# APPENDED, never replaced. A custom rule that defines no keywords of its own therefore
+# still inherits the built-in's keyword pre-filter, which can silently narrow a broader
+# custom regex back down to whatever the built-in was matching. See anthropic-api-key
+# below for the one rule here this actually happened to.
+#
+# Checked 2026-08-12 against gitleaks 8.30.1's embedded default config: none of the
+# other five rule IDs below collide with a built-in one. Re-check when adding a new
+# custom rule ID -- this is not a guarantee that survives a gitleaks version bump.
 
 [[rules]]
 id = "coderabbit-api-key"
@@ -51,20 +63,44 @@ tags = ["credential", "powershell"]
 [[rules]]
 id = "internal-hostname"
 description = "Internal hostname or FQDN leaking into code"
-regex = '''(?i)\b[a-z0-9\-]+\.(ufl|shands|ufhealth)\.(edu|org)\b'''
+# Non-capturing (?:...). A prior campaign round (N45, see adjudication.md)
+# declined a finding on this exact shape, reasoning "the whole match IS the
+# sensitive value... no inversion is possible" -- WRONG, empirically. gitleaks
+# defaults secretGroup to the first (...) group whenever ANY exists, even
+# unset. With the CAPTURING groups this had, --redact on
+# "patient-db-server.ufl.edu" produced Match: "patient-db-server.REDACTED.edu"
+# -- the actual identifying hostname prefix stayed in plaintext; only the
+# domain suffix word was masked. Verified on the pinned 8.30.1 before and
+# after this change.
+regex = '''(?i)\b[a-z0-9\-]+\.(?:ufl|shands|ufhealth)\.(?:edu|org)\b'''
 tags = ["pii", "internal"]
 
 [[rules]]
 id = "tailscale-authkey"
 description = "Tailscale auth key"
-regex = '''tskey-(auth|api|client)-[A-Za-z0-9\-]{10,}'''
+# Non-capturing (?:...), same defect and same N45 correction as above -- and
+# worse here: with the CAPTURING group, --redact on
+# "tskey-auth-k7x9m2p4q8r1s3t5u7v9w1x3y5z7" produced
+# Match: "tskey-REDACTED-k7x9m2p4q8r1s3t5u7v9w1x3y5z7" -- the metadata WORD
+# ("auth") got redacted while the actual random secret material stayed fully
+# visible. A shared "redacted" report from this rule was leaking the real key.
+regex = '''tskey-(?:auth|api|client)-[A-Za-z0-9\-]{10,}'''
 tags = ["key", "tailscale"]
 
 [[rules]]
 id = "anthropic-api-key"
 description = "Anthropic API key"
+# gitleaks ships its own built-in rule under this exact ID: a strict
+# sk-ant-api03-<93 chars>AA shape with keywords = ["sk-ant-api03"]. Per the merge
+# rule above, that keyword list survives untouched even though this broader regex
+# replaces the built-in's -- so without keywords below, a non-api03-shaped sk-ant-
+# secret would never even reach the regex. The value here is the regex's own fixed
+# literal prefix, the same way the built-in derives its keyword from its own regex.
 regex = '''sk-ant-[A-Za-z0-9\-_]{20,}'''
+keywords = ["sk-ant-"]
 tags = ["key", "anthropic"]
+# Re-testing by hand: a sequential-alphabet body (AbCdEfGh...) still won't fire here --
+# unrelated built-in stopword suppression, see the ghp_ note in test-gitleaks-guard.sh.
 
 # ---------------------------------------------------------------------------
 # Allowlist — reduce false positives without punching holes
@@ -86,7 +122,9 @@ description = "Known-safe paths and placeholder values"
 # CLOSED 2026-08-08 by scripts/scan-staged-binaries.sh, wired in as the lefthook
 # `secrets-binaries` pre-commit step. It defeats the upstream allowlist by changing the
 # PATH gitleaks sees rather than the config -- OOXML is copied to a *.zip temp name and
-# traversed with --max-archive-depth, PDFs go through pdftotext into `gitleaks stdin`.
+# traversed with --max-archive-depth, PDFs go through pdftotext into a temp FILE that
+# `gitleaks dir` then scans (not `gitleaks stdin` -- that subcommand has an ignore-file
+# gap a candidate can reach; see the IGNORE_PATH comment in scan-staged-binaries.sh).
 # THIS FILE THEREFORE REMAINS THE SINGLE SOURCE OF TRUTH, with every built-in rule still
 # live. No rule is duplicated anywhere, so nothing can drift out of sync.
 #
@@ -128,9 +166,12 @@ description = "Known-safe paths and placeholder values"
 # quietly rotting.
 #
 # STANDING LIMIT, now narrower: pdf/xlsx/docx ARE read (see above). What no text scanner
-# can read is formats with no text layer -- images, fbx, exe, and scanned/image-only PDFs.
-# Those are REPORTED as NOT INSPECTED rather than passed silently. A green check on one of
-# them still means "not inspected," never "clean." This repo family already shipped a
+# can read is formats with no text layer -- images, fbx, exe, compressed archives
+# (tar/gz/7z...), and scanned/image-only PDFs. The never-text formats are REPORTED as
+# NOT INSPECTED (non-blocking); an image-only PDF is the deliberate exception -- PDF is
+# a text-normal format, so one with no text layer is anomalous and FAILS as UNKNOWN,
+# forcing a human decision instead of a shrug. A green check on any reported file still
+# means "not inspected," never "clean." This repo family already shipped a
 # commit whose only file was a 34KB .xlsx that gitleaks passed after scanning ~0 bytes;
 # that exact case is now covered. Judge the remaining opaque formats by hand.
 #
@@ -218,4 +259,36 @@ regexes = [
   # reference". Measured: anchoring changes no finding across 8 fleet repos, so the
   # narrowing costs nothing. A reference is the WHOLE value or it is not a reference.
   '''(?i)^\$env:[A-Za-z_][A-Za-z0-9_]*$''',  # PowerShell env var references
+  # CHECKLIST.md and MIGRATION-HANDOFF.md both use this EXACT string as a worked
+  # example of a low-entropy fake secret that gitleaks' entropy threshold would
+  # NOT catch -- the docs explicitly instruct testing with a real high-entropy
+  # value instead, not this one. It only started firing once the full-history
+  # scan (.github/workflows/secret-scan.yml) reached root, since the built-in
+  # anthropic-api-key rule matches on the sk-ant- prefix, not entropy. Anchored
+  # to the exact literal, matching every other entry in this list, so this does
+  # not widen coverage for any other sk-ant- shaped value.
+  '''^sk-ant-abc123fakefakefake0000$''',
+  # campaign/round2/adjudication.md's N45-CORRECTED entry quotes these two exact
+  # values verbatim to show what the pre-fix --redact output looked like on the
+  # internal-hostname/tailscale-authkey redaction bypass (see the non-capturing-
+  # group fix on those two rules above). This is documentation describing an
+  # already-fixed bug, not a live hostname or key -- anchored to the exact
+  # literals so nothing else matching either rule's shape is exempted.
+  '''^patient-db-server\.ufl\.edu$''',
+  '''^tskey-auth-k7x9m2p4q8r1s3t5u7v9w1x3y5z7$''',
+  # tests/test-gitleaksignore-quarantine.sh's ORIGINAL fixture token (#58) --
+  # permanently baked into main's history via that PR's squash-merge commit, so
+  # full-history scans need to tolerate it forever; a later commit changing the
+  # fixture's own source cannot retroactively clean an already-merged commit.
+  # NOT a live credential -- self-labeled fake in its own text
+  # (FIXTUREFAKETOKEN...NOT...REAL).
+  #
+  # DO NOT allowlist tests/test-gitleaksignore-quarantine.sh's CURRENT fixture
+  # value (see that file): that scenario's whole point is verifying gitleaks
+  # actively detects a real secret despite a malicious .gitleaksignore, and an
+  # allowlist entry matches by VALUE everywhere gitleaks runs, not just in the
+  # full-history scan this entry exists for -- allowlisting the live fixture
+  # would silently defeat the test it is planted in. That is exactly why the
+  # fixture was changed to a different literal instead of reusing this one.
+  '''^cr-FIXTUREFAKETOKEN0NOT0REAL0123456789$''',
 ]

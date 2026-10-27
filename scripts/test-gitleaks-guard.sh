@@ -134,12 +134,27 @@ scan() {
   # Measured gap, stated so it is not rediscovered: a NONEXISTENT target still
   # exits 0 and writes an empty report. Every target here is built by this
   # script, so it cannot fire — do not reuse this helper on caller-supplied paths.
+  # stderr KEPT, not discarded: when the guard or gitleaks aborts, its own
+  # message names the cause (a version refusal, a config parse error), and a
+  # generic "exited N" with that message thrown away sends the reader off to
+  # re-run the scan by hand to learn what this function already knew.
   "$GUARD" dir "$target" \
     --config "$CONFIG" --no-banner --log-level error --exit-code 0 \
-    --report-format json --report-path "$report" "$@" >/dev/null 2>&1 || rc=$?
+    --report-format json --report-path "$report" "$@" \
+    >/dev/null 2>"$WORK/scan-stderr.log" || rc=$?
   if [ "$rc" -ne 0 ]; then
     printf '\n✗ gitleaks exited %s scanning %s — with --exit-code 0 that is an\n' "$rc" "$target" >&2
-    printf '  error, not findings. No assertion below can speak for .gitleaks.toml.\n\n' >&2
+    printf '  error, not findings. No assertion below can speak for .gitleaks.toml.\n' >&2
+    printf '  Its own message:\n' >&2
+    # NOT `|| true`. This sed IS the diagnostic — swallowing its failure would
+    # leave the reader with a bare exit code, which is the state this whole
+    # block was added to avoid. A failure here is itself information (the log
+    # is unreadable or absent), so say that instead of nothing.
+    if ! sed 's/^/      /' "$WORK/scan-stderr.log" >&2; then
+      printf '      (could not read %s — the scanner'"'"'s own message is lost)\n' \
+        "$WORK/scan-stderr.log" >&2
+    fi
+    printf '\n' >&2
     exit 1
   fi
   if [ ! -f "$report" ]; then
@@ -242,10 +257,19 @@ fi
 MINIMAL_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 if PATH="$MINIMAL_PATH" command -v gitleaks >/dev/null 2>&1; then
   skip "errors when gitleaks is absent" "gitleaks is installed inside $MINIMAL_PATH here"
-elif PATH="$MINIMAL_PATH" "$GUARD" >/dev/null 2>&1; then
-  fail "errors when gitleaks is absent" "guard exited 0 with no scanner available"
 else
-  pass "errors when gitleaks is absent"
+  # The REASON is asserted, not just the non-zero exit: the guard also exits
+  # non-zero for a below-floor version or an unreadable version file, so a bare
+  # status check would pass this case while a different refusal did the work.
+  _absent_rc=0
+  _absent_out=$(PATH="$MINIMAL_PATH" "$GUARD" 2>&1) || _absent_rc=$?
+  if [ "$_absent_rc" -eq 0 ]; then
+    fail "errors when gitleaks is absent" "guard exited 0 with no scanner available"
+  elif printf '%s' "$_absent_out" | grep -qF 'not on PATH'; then
+    pass "errors when gitleaks is absent (named: not on PATH)"
+  else
+    fail "errors when gitleaks is absent" "non-zero exit but the wrong refusal: $(printf '%s' "$_absent_out" | tr '\n' ' ')"
+  fi
 fi
 
 # --- 2. documented scan coverage --------------------------------------------
@@ -309,7 +333,11 @@ printf 'api_key = "%s"\n' "$PROBE_VALUE"          > "$FIX/plain/credentials.lock
 # and must stay suppressed; a value merely CONTAINING one is a secret wearing a
 # reference as a prefix, and the unanchored pattern exempted it. One fixture
 # each, because a single-direction test passes under either pattern.
+# shellcheck disable=SC2016  # the UNEXPANDED $env: literal is the fixture: these
+# lines exist to test how the allowlist treats PowerShell references, and a
+# double-quoted form would expand to nothing and test a different string.
 printf 'token = "$env:GITHUB_TOKEN"\n'            > "$FIX/plain/envref.txt"
+# shellcheck disable=SC2016  # same fixture, other direction
 printf 'token = "$env:X%s"\n' "$PROBE_VALUE"      > "$FIX/plain/envprefix.txt"
 
 # Redaction regression. Both these rules once reported the CREDENTIAL in their
@@ -317,8 +345,57 @@ printf 'token = "$env:X%s"\n' "$PROBE_VALUE"      > "$FIX/plain/envprefix.txt"
 # vsphere-credential-literal had no capture group at all, so the whole line was
 # the "secret". The assertions below check the redacted REPORT, not just that the
 # rule fires -- a rule can fire correctly and still print the password.
+# shellcheck disable=SC2016  # literal $password is the PowerShell fixture under test
 printf '$password = "%s"\n' "$REDACT_PROBE"       > "$FIX/plain/ps_secret.ps1"
 printf 'Connect-VIServer -Server vc01 -Password "%s"\n' "$REDACT_PROBE" > "$FIX/plain/vsphere.ps1"
+# internal-hostname and tailscale-authkey: NEITHER had secretGroup, and BOTH had a
+# capture group anyway -- (ufl|shands|ufhealth) and (auth|api|client) exist only to
+# alternate the PATTERN, not to isolate a value, but gitleaks defaults secretGroup to
+# the first capture group whenever one exists. Verified on 8.30.1 before the fix:
+# --redact on these turned "$REDACT_PROBE.ufl.edu" into "$REDACT_PROBE.REDACTED.edu"
+# and "tskey-auth-$REDACT_PROBE" into "tskey-REDACTED-$REDACT_PROBE" -- the metadata
+# word got masked, the actual sensitive value did not. The regex requires a domain
+# suffix, so REDACT_PROBE (alphanumeric, no dots) is the identifying PREFIX here,
+# not a drop-in value -- unlike the two fixtures above, this rule's "identifier" and
+# "secret" are not separable by design; the whole match must vanish under --redact.
+# HOSTNAME_TLD split out, same reason as ANTHROPIC_HEAD above: the original
+# one-line printf put the placeholder immediately against the literal domain
+# suffix, which put a matching internal-hostname shape in THIS FILE'S OWN
+# committed source -- the placeholder's trailing letter plus the suffix's two
+# dot-joined labels satisfied the rule's prefix-plus-TLD pattern outright. A
+# full-history scan of this repo would flag this source line for the very
+# rule it only pretends to be an example of. (Deliberately not spelling the
+# offending token out here either -- explaining a self-matching pattern by
+# quoting it verbatim just relocates the match, it does not describe it.)
+# Splitting the TLD into its own variable, with the joining dots assembled
+# only at runtime, removes that shape from the committed text without
+# changing what the fixture actually tests.
+HOSTNAME_TLD='ufl'
+printf 'internal_host = %s.%s.edu\n' "$REDACT_PROBE" "$HOSTNAME_TLD" > "$FIX/plain/hostname.txt"
+printf 'TS_KEY=tskey-auth-%s\n' "$REDACT_PROBE"             > "$FIX/plain/tskey.txt"
+
+# Anthropic keyword-collision regression (see .gitleaks.toml). gitleaks' own built-in
+# anthropic-api-key rule requires the literal "sk-ant-api03" keyword before it even
+# tries its regex; without an explicit keywords= on the custom rule, the merged rule
+# silently inherits that narrow pre-filter even though its regex is broader. Split
+# into head/body across variables for the same reason PROBE_VALUE is: so neither
+# shaped string appears as one literal token in this script's own source.
+ANTHROPIC_HEAD='sk-ant-'
+ANTHROPIC_API03_HEAD='sk-ant-api03-'
+# 93 low-entropy chars -- the exact length the BUILT-IN rule's regex requires
+# (sk-ant-api03-[a-zA-Z0-9_\-]{93}AA). Built by repeating PROBE_TAIL and trimming,
+# not hand-counted, so it cannot silently drift off that length.
+ANTHROPIC_API03_BODY="${PROBE_TAIL}${PROBE_TAIL}${PROBE_TAIL}${PROBE_TAIL}"
+ANTHROPIC_API03_BODY="${ANTHROPIC_API03_BODY:0:93}"
+# Fixture A: sk-ant- shaped but NOT sk-ant-api03 -- invisible pre-fix, since the
+# inherited keyword pre-filter never lets the regex run on it at all.
+printf 'api_key = "%s%s"\n' "$ANTHROPIC_HEAD" "$PROBE_TAIL"            > "$FIX/plain/anthropic.txt"
+# Fixture B: a realistic sk-ant-api03-shaped key. Caught on BOTH sides of the fix
+# today (its own keyword IS "sk-ant-api03"), but the merge fully REPLACES the
+# built-in's regex rather than layering it -- post-fix, a real key is only still
+# caught because the custom broad regex happens to be a superset. This fixture
+# pins that down as a permanent assertion instead of a one-time manual check.
+printf 'api_key = "%s%sAA"\n' "$ANTHROPIC_API03_HEAD" "$ANTHROPIC_API03_BODY" > "$FIX/plain/anthropic-api03.txt"
 
 # scan() aborts inside a command substitution, which ends only the SUBSHELL --
 # the status is what reaches here, so it must be checked or the abort is inert.
@@ -326,6 +403,9 @@ FLAGGED=$(scan "$FIX" "$WORK/report-full.json") || exit 1
 
 expect_flagged "flags a coderabbit token in .txt"                 "$FLAGGED" "plain/probe.txt"
 expect_flagged "flags a coderabbit token in .md"                  "$FLAGGED" "plain/probe.md"
+expect_flagged "flags a non-api03-shaped Anthropic key (built-in ID collision closed)" \
+               "$FLAGGED" "plain/anthropic.txt"
+expect_flagged "a realistic sk-ant-api03-shaped key is still flagged" "$FLAGGED" "plain/anthropic-api03.txt"
 expect_flagged "a real token merely CONTAINING 'example' is still flagged" "$FLAGGED" "plain/placeholder.txt"
 expect_clean   "a value that IS the placeholder stays suppressed"  "$FLAGGED" "plain/placeholder-exact.txt"
 
@@ -365,6 +445,8 @@ fi
 # "powershell-plaintext-password" contains the bare word, so a bare-word grep
 # matches the report regardless of what redaction did -- the assertion would be
 # non-discriminating, which is the defect it was added to close.
+# shellcheck disable=SC2016  # the literal, unexpanded '$password' is the point: the
+# RuleID contains the bare word, so only the dollar-prefixed form discriminates.
 for _ident in '$password' 'Connect-VIServer'; do
   _g=0; grep -qF "$_ident" "$WORK/report-redacted.json" || _g=$?
   if [ "$_g" -eq 0 ]; then
@@ -391,20 +473,31 @@ done
 # token of the same shape IS. The kit's canaries survive only because they match the
 # custom coderabbit-api-key rule; anything pointed at a default rule would go quietly
 # green. Asserting the RuleID is what turns that from luck into a checked property.
-for _rule in vsphere-credential-literal powershell-plaintext-password; do
+for _rule in vsphere-credential-literal powershell-plaintext-password internal-hostname tailscale-authkey; do
   # python3, not jq: this file's header promises it runs identically at pre-push
   # on a Mac with no extra tooling, and jq is not that. python3 is already this
   # file's JSON parser elsewhere; jq would be the drift the header forbids, and
   # its absence would have surfaced as "could not read the report" — a scanner
   # failure, not a missing dependency.
+  # RuleID AND File matched TOGETHER: a global RuleID count also passes when the
+  # rule fires on some OTHER fixture while its own goes unmatched — the same
+  # non-discrimination one notch up. Each rule is pinned to the fixture written
+  # for it.
+  case "$_rule" in
+    vsphere-credential-literal)      _rfile="plain/vsphere.ps1" ;;
+    powershell-plaintext-password)   _rfile="plain/ps_secret.ps1" ;;
+    internal-hostname)               _rfile="plain/hostname.txt" ;;
+    tailscale-authkey)               _rfile="plain/tskey.txt" ;;
+  esac
   _n=$(python3 -c 'import json,sys
-try: d=json.load(open(sys.argv[2]))
+try: d=json.load(open(sys.argv[3]))
 except Exception: print("ERR"); sys.exit(0)
-print(sum(1 for x in d if x.get("RuleID")==sys.argv[1]))' "$_rule" "$WORK/report-redacted.json" 2>/dev/null || echo ERR)
+print(sum(1 for x in d if x.get("RuleID")==sys.argv[1] and x.get("File","").endswith(sys.argv[2])))' \
+    "$_rule" "$_rfile" "$WORK/report-redacted.json" 2>/dev/null || echo ERR)
   case "$_n" in
     ERR|"") fail "could not read RuleID '$_rule' from the report — this proves nothing" ;;
-    0)      fail "no finding carries RuleID '$_rule' — a different rule is doing this work" ;;
-    *)      pass "redaction fixture is matched by RuleID '$_rule' ($_n finding(s))" ;;
+    0)      fail "no finding carries RuleID '$_rule' on $_rfile — a different rule (or file) is doing this work" ;;
+    *)      pass "redaction fixture $_rfile is matched by RuleID '$_rule' ($_n finding(s))" ;;
   esac
 done
 expect_clean   "real image extensions stay excluded"              "$FLAGGED" "plain/probe.png"
@@ -439,11 +532,31 @@ expect_clean "KNOWN GAP: tests/fixtures/ is skipped (this repo's allowlist paths
 # the token. Anyone who raises the body's entropy silently restores the masking; this
 # assertion is what stops that from going unnoticed.
 #
-# --enable-rule was checked in the same pass to confirm it is not silently ignored:
-# `--enable-rule no-such-rule-xyz` returns zero findings, so a pass here means the named
-# rule really fired.
+# --enable-rule was checked to confirm it is not silently ignored. Corrected 2026-08-12
+# after re-verifying against gitleaks 8.30.1 (the pin in scripts/gitleaks-version.env):
+# `--enable-rule no-such-rule-xyz` is a FATAL error ("Requested rule no-such-rule-xyz
+# not found in rules"), exit 1, no report written -- NOT the silent zero-findings run
+# this comment previously described. If anything that is the stronger guarantee:
+# gitleaks validates the rule ID before it scans anything, so scan() below producing a
+# report at all already proves `coderabbit-api-key` is real and recognized -- a pass
+# means that rule, specifically, fired.
 ISOLATED=$(scan "$FIX" "$WORK/report-isolated.json" --enable-rule coderabbit-api-key) || exit 1
 expect_flagged "the custom coderabbit-api-key rule fires on its own" "$ISOLATED" "plain/probe.txt"
+
+# Isolate anthropic-api-key the same way, for a DIFFERENT reason: this is the one rule
+# in the file that collides with a built-in gitleaks rule ID (see .gitleaks.toml). A
+# plain flag in $FLAGGED above cannot tell "the fix works" apart from "some unrelated
+# rule happens to match this string" -- --enable-rule does not change how the merge
+# computed keywords, so this isolation still exercises the exact merged rule that scans
+# in production. This scan also sees plain/anthropic-api03.txt (the fixture written above), which
+# this rule's inherited keyword already catches even pre-fix -- so the isolated scan's
+# TOTAL finding count moves 1 -> 2, not 0 -> 1. What the assertion below checks is
+# narrower and is the part that actually discriminates the bug: whether
+# plain/anthropic.txt specifically is a member of the flagged set. Verified 2026-08-12:
+# absent pre-fix, present post-fix.
+ANTHROPIC_ISOLATED=$(scan "$FIX" "$WORK/report-anthropic-isolated.json" --enable-rule anthropic-api-key) || exit 1
+expect_flagged "the custom anthropic-api-key rule catches a non-api03-shaped sk-ant- secret" \
+               "$ANTHROPIC_ISOLATED" "plain/anthropic.txt"
 
 # --- 3. the invocation lefthook actually runs -------------------------------
 #
@@ -554,6 +667,19 @@ printf '\n%s assertions run, %s failed, %s skipped\n' "$RUN" "$FAILED" "$SKIPPED
 # catch, in the file that catches it.
 if [ "$RUN" -eq 0 ]; then
   printf '\n✗ no assertions ran — the self-test inspected nothing, which is UNKNOWN, not clean.\n\n'
+  exit 1
+fi
+# EXACT, like both sibling suites, and for their stated reason: a floor tolerates
+# loss, and a guard that tolerates loss cannot detect loss. RUN + SKIPPED because
+# the absent-gitleaks case legitimately skips on machines where gitleaks lives in
+# the system dirs — a skip is a counted decision, not a lost assertion. Bump this
+# when you add an assertion; that forced noticing is the point.
+_EXPECTED_ASSERTIONS=31   # 29 (main, grown from unrelated merges) + 2: internal-hostname/
+                          # tailscale-authkey redaction regression (gitleaks-redaction-bypass fix)
+if [ $((RUN + SKIPPED)) -ne "$_EXPECTED_ASSERTIONS" ]; then
+  printf '\n✗ %s assertions ran (+%s skipped), expected exactly %s\n' "$RUN" "$SKIPPED" "$_EXPECTED_ASSERTIONS"
+  printf '    Assertions were added or lost. If added, bump _EXPECTED_ASSERTIONS deliberately;\n'
+  printf '    if lost, that is the regression this guard exists for.\n\n'
   exit 1
 fi
 if [ "$FAILED" -ne 0 ]; then
