@@ -122,6 +122,33 @@ describe("commitPage", () => {
     });
   });
 
+  test("refuses while another running process holds the worktree lock", () => {
+    return withSite(({ wt }) => {
+      writeFileSync(join(wt, ".git", "rewrite-queue.lock"), String(process.pid));
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"), /busy/);
+      assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
+    });
+  });
+
+  test("takes over a lock left by a process that is no longer running", () => {
+    return withSite(({ wt }) => {
+      const lock = join(wt, ".git", "rewrite-queue.lock");
+      writeFileSync(lock, "999999");
+      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      assert.equal(existsSync(lock), false);
+    });
+  });
+
+  test("works in a linked git worktree, the production setup", () => {
+    return withSite(({ wt, root, origin }) => {
+      const linked = join(root, "linked");
+      git(wt, "worktree", "add", "--quiet", "--detach", linked, "origin/main");
+      const r = commitPage(linked, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      assert.equal(git(linked, "rev-parse", `${r.commit}^`), git(linked, "rev-parse", "origin/main"));
+      assert.equal(git(origin, "branch", "--list", "rewrite/*"), "");
+    });
+  });
+
   test("refuses a dirty worktree", () => {
     return withSite(({ wt }) => {
       writeFileSync(join(wt, "stray.txt"), "left behind\n");

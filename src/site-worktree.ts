@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "child_process";
-import { renameSync, writeFileSync } from "fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const MAIN_REF = "origin/main";
@@ -92,11 +92,60 @@ export function staleCandidates(
     .map(({ page }) => page);
 }
 
+// WHAT: Hold an exclusive lock on the worktree for the duration of `fn`.
+// WHY:  The claim lock is per article, so two overlapping runs could rewrite different
+//       pages and interleave git commands in this one checkout: one run's detach
+//       would leave the other committing on a detached HEAD. The lock file records
+//       its owner's PID; a lock whose owner is no longer running is stale and taken
+//       over, so a crashed run cannot block the queue.
+function withWorktreeLock<T>(dir: string, fn: () => T): T {
+  // --absolute-git-dir: in a linked worktree (James's setup) --git-dir is absolute
+  // and would not join onto `dir`.
+  const lockPath = join(git(dir, "rev-parse", "--absolute-git-dir"), "rewrite-queue.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      try {
+        return fn();
+      } finally {
+        rmSync(lockPath, { force: true });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const owner = parseInt(readFileSync(lockPath, "utf-8"), 10);
+      if (Number.isInteger(owner) && processAlive(owner)) {
+        throw new Error(`astgl-site worktree is busy: locked by running process ${owner}`);
+      }
+      rmSync(lockPath, { force: true });
+    }
+  }
+  throw new Error("astgl-site worktree lock could not be taken");
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 // WHAT: Commit `content` as the page for `slug` on a new branch cut from origin/main.
 // WHY:  Refuses a dirty worktree, an existing branch and an unknown page rather than
 //       guessing. The file is written to a temp name and renamed so a crash never
 //       leaves a half-written page; the branch is the unit James reviews.
 export function commitPage(
+  dir: string,
+  slug: string,
+  content: string,
+  date: string,
+  message: string
+): SiteCommit {
+  return withWorktreeLock(dir, () => commitPageUnlocked(dir, slug, content, date, message));
+}
+
+function commitPageUnlocked(
   dir: string,
   slug: string,
   content: string,
@@ -114,8 +163,8 @@ export function commitPage(
   git(dir, "switch", "--quiet", "--create", branch, MAIN_REF);
 
   const pagePath = join(dir, relPath);
+  const tempPath = `${pagePath}.rewrite-tmp`;
   try {
-    const tempPath = `${pagePath}.rewrite-tmp`;
     writeFileSync(tempPath, content);
     renameSync(tempPath, pagePath);
     git(dir, "add", "--", relPath);
@@ -127,7 +176,9 @@ export function commitPage(
   } catch (err) {
     // The branch was created by this call and holds no commit of ours yet, so
     // removing it restores the state before the call; a hook refusal stays visible
-    // in the rethrown error.
+    // in the rethrown error. The temp file is untracked, so git would keep it and
+    // every later run would fail the clean-worktree check.
+    rmSync(tempPath, { force: true });
     git(dir, "switch", "--quiet", "--discard-changes", "--detach", MAIN_REF);
     git(dir, "branch", "--quiet", "-D", branch);
     throw err;
