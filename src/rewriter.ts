@@ -39,6 +39,11 @@ const RETRY_BASE_MS = 3000;
 const REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 // Generous output budget — long-form answer pages run ~2-4K tokens.
 const NUM_PREDICT = 6000;
+// Context window set on every request. A model's own default can be far smaller:
+// astgl-voice:7b-v1.5 pins 4096, which silently truncated the voice prompt (an 8 KB
+// profile plus the draft) in the first real evaluation (2026-11-03). Prompt plus
+// NUM_PREDICT must fit; the voice model supports 32768.
+const NUM_CTX = 16384;
 
 export interface RewriteOptions {
   draftModel: string;
@@ -133,7 +138,7 @@ async function ollamaGenerate(
     model,
     prompt,
     stream: false,
-    options: { num_predict: NUM_PREDICT, temperature: 0.5 },
+    options: { num_ctx: NUM_CTX, num_predict: NUM_PREDICT, temperature: 0.5 },
   });
 
   const start = Date.now();

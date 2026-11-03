@@ -35,6 +35,7 @@ interface Call {
   url: string;
   model: string;
   prompt: string;
+  numCtx: number | undefined;
 }
 
 const realFetch = globalThis.fetch;
@@ -48,8 +49,12 @@ function stubFetch(): void {
     if (host !== "localhost" && host !== "127.0.0.1") {
       throw new Error(`non-local request attempted: ${url}`);
     }
-    const body = JSON.parse(String(init?.body)) as { model: string; prompt: string };
-    calls.push({ url, model: body.model, prompt: body.prompt });
+    const body = JSON.parse(String(init?.body)) as {
+      model: string;
+      prompt: string;
+      options?: { num_ctx?: number };
+    };
+    calls.push({ url, model: body.model, prompt: body.prompt, numCtx: body.options?.num_ctx });
     return new Response(JSON.stringify({ response: responses.shift() ?? "" }), { status: 200 });
   }) as typeof fetch;
 }
@@ -84,6 +89,8 @@ describe("rewritePage", () => {
     assert.ok(!calls[0].prompt.includes("author: James Cruce"), "frontmatter must not reach the model");
     assert.ok(calls[1].prompt.includes("VOICE PROFILE TEXT"));
     assert.ok(calls[1].prompt.includes("Draft body."));
+    // A model's own small default context must never truncate the prompt.
+    assert.ok(calls.every((c) => (c.numCtx ?? 0) >= 16384));
 
     const expectedFrontmatter = FRONTMATTER.replace("date: '2026-04-09'", "date: '2026-11-03'");
     assert.equal(out.page, `${expectedFrontmatter}\n# What is an MCP server?\n\nVoiced body.\n`);
