@@ -83,6 +83,15 @@ describe("commitPage", () => {
     });
   });
 
+  test("leaves the worktree detached so James can delete the branch to reject", () => {
+    return withSite(({ wt }) => {
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      assert.equal(git(wt, "rev-parse", "HEAD"), git(wt, "rev-parse", "origin/main"));
+      git(wt, "branch", "--quiet", "-D", r.branch);
+      assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
+    });
+  });
+
   test("runs the repository's commit hooks", () => {
     return withSite(({ wt }) => {
       const marker = join(wt, "..", "hook-ran");

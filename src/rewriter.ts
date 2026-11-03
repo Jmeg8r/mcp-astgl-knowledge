@@ -93,14 +93,27 @@ function localOllamaBaseUrl(): string {
   return base;
 }
 
-// WHAT: Strip a ```markdown fence the model wrapped the whole answer in, then
-//       refuse output that is empty or carries its own frontmatter.
+// WHAT: Refuse output that carries its own YAML frontmatter, then strip wrappers the
+//       model echoed (a ```markdown fence, the <body> tags, lone `---` lines at the
+//       start or end), then refuse empty output.
+// WHY:  The first real evaluation run (2026-11-03) showed the draft model echoing the
+//       prompt's delimiters around an otherwise good body. A real frontmatter block
+//       (`---` then `key: value` lines) is still refused: only the site's own
+//       frontmatter may reach the page.
 function cleanModelOutput(text: string, pass: string): string {
   let out = text.trim();
+  if (/^---\n(?:[\w-]+:.*\n)+---/.test(out)) {
+    throw new Error(`${pass} pass returned malformed output (frontmatter)`);
+  }
   const fenced = out.match(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/);
   if (fenced) out = fenced[1].trim();
+  out = out
+    .replace(/^<\/?body>\s*/i, "")
+    .replace(/\s*<\/body>$/i, "")
+    .replace(/^---\s*\n/, "")
+    .replace(/\n---\s*$/, "")
+    .trim();
   if (!out) throw new Error(`${pass} pass returned empty output`);
-  if (out.startsWith("---")) throw new Error(`${pass} pass returned malformed output (frontmatter)`);
   return out;
 }
 
@@ -131,6 +144,8 @@ async function ollamaGenerate(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: requestBody,
+        // A redirect could carry page text off this machine past the local-host check.
+        redirect: "error",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       break;
@@ -166,12 +181,11 @@ function draftPrompt(body: string): string {
     "",
     "Keep every fact exactly as written. Do NOT change, add or remove any version number, statistic, date, URL, product name or quotation, even if you believe it is out of date. Do NOT add examples, benchmarks or claims that are not in the original.",
     "",
-    "Return only the rewritten markdown body: no preamble, no commentary, no frontmatter, no code-fence wrapping.",
+    "The original body is between the <body> tags below. Return only the rewritten markdown body: no tags, no preamble, no commentary, no frontmatter, no code-fence wrapping.",
     "",
-    "ORIGINAL BODY:",
-    "---",
+    "<body>",
     body,
-    "---",
+    "</body>",
   ].join("\n");
 }
 
@@ -185,12 +199,11 @@ function voicePrompt(voiceProfile: string, draft: string): string {
     "  - Apply the voice rules: remove AI markers, vary sentence length, keep the senior-engineer tone.",
     "  - Keep every fact, number, version, date, URL and quotation exactly as written. Add nothing new.",
     "  - Keep the markdown heading structure and roughly the same length.",
-    "  - Return ONLY the markdown body: no preamble, no frontmatter, no code fences.",
+    "  - The body is between the <body> tags below. Return ONLY the markdown body: no tags, no preamble, no frontmatter, no code fences.",
     "",
-    "BODY:",
-    "---",
+    "<body>",
     draft,
-    "---",
+    "</body>",
   ].join("\n");
 }
 

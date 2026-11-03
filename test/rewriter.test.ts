@@ -106,6 +106,22 @@ describe("rewritePage", () => {
     await assert.rejects(rewritePage(PAGE, opts, deps), /malformed/);
   });
 
+  test("strips delimiters the model echoed around a good body", async () => {
+    responses = ["---\nDraft body.\n---", "<body>\n# Title\n\nBody.\n</body>"];
+    const out = await rewritePage(PAGE, opts, deps);
+    assert.ok(out.page.endsWith("\n# Title\n\nBody.\n"));
+  });
+
+  test("never follows a redirect from the Ollama host", async () => {
+    const seen: RequestInit[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return new Response(JSON.stringify({ response: "Body." }), { status: 200 });
+    }) as typeof fetch;
+    await rewritePage(PAGE, opts, deps);
+    assert.ok(seen.length > 0 && seen.every((i) => i.redirect === "error"));
+  });
+
   test("unwraps a response the model fenced as markdown", async () => {
     responses = ["Draft body.", "```markdown\n# Title\n\nBody.\n```"];
     const out = await rewritePage(PAGE, opts, deps);

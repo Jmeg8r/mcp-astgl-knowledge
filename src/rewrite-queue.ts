@@ -135,16 +135,19 @@ function resolveOpenJobs(deps: QueueDeps): QueueSummary["resolved"] {
 
 export function reviewNotice(page: AnswerPage, branch: string, siteDir: string, facts: string[]): string {
   return [
-    `ASTGL rewrite ready for review: ${page.slug}`,
-    `Page: ${page.url}`,
-    `Branch: ${branch} (local only, not pushed)`,
-    facts.length > 0
-      ? `Check these dated facts before merging: ${facts.join(", ")}`
-      : "No dated facts found to check.",
+    `ASTGL answer page rewritten: ${page.slug}`,
+    page.url,
+    `Local branch: ${branch} (not pushed)`,
     "",
-    "To publish, push the branch and open a PR:",
+    facts.length > 0
+      ? `Before merging, check these dated facts: ${facts.join(", ")}`
+      : "No dated facts to check.",
+    "",
+    "Publish: push the branch, then open a PR and merge it.",
     `git -C ${siteDir} push origin ${branch}`,
-    "To reject, delete the branch (and close the PR if you opened one).",
+    "",
+    "Reject: delete the local branch (close the PR first if you opened one).",
+    `git -C ${siteDir} branch -D ${branch}`,
   ].join("\n");
 }
 

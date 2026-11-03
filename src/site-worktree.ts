@@ -132,7 +132,11 @@ export function commitPage(
     git(dir, "branch", "--quiet", "-D", branch);
     throw err;
   }
-  return { branch, commit: git(dir, "rev-parse", "HEAD"), pagePath };
+  const commit = git(dir, "rev-parse", "HEAD");
+  // Leave the worktree detached so the branch is not checked out: James rejects a
+  // rewrite by deleting the branch, and git refuses to delete a checked-out branch.
+  git(dir, "switch", "--quiet", "--detach", MAIN_REF);
+  return { branch, commit, pagePath };
 }
 
 // WHAT: Where an open job stands, read from git after a fetch.
