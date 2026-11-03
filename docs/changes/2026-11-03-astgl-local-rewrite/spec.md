@@ -24,7 +24,7 @@ verified-facts table built from the existing `freshness.ts` npm and GitHub relea
 checks. The job lists the original's dated facts (versions, model names, years) in the
 notification and the commit message as "check these", for James to correct during
 review.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F2. astgl-site's git history is too thin for the evaluation set (intent Q5).**
 Source: measured 2026-11-03. 18 of the 20 pages have 3 commits and 2 have 4; the
@@ -34,7 +34,7 @@ later commits add graphics and related links, not prose revisions. There is no
 stale facts (each planted fact is known, so its handling is scored exactly), and say so
 in the results. Add the 34 existing cloud-polished drafts of the same pages as a voice
 reference only. They already exist, so this makes no new cloud call.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F3. Schema change on the live `knowledge.db`.** Source: CLAUDE.md Mistakes #8 and
 #10, skill astgl-db-surgeon. `rewrite_jobs.status` has a `CHECK` constraint, so adding
@@ -44,14 +44,14 @@ do in place. The spec also adds two columns.
 this table; `grep` confirms no second definition), run once in a supervised step:
 checkpoint and back up per the db-surgeon contract, `PRAGMA integrity_check` before and
 after, row count before equals after. Never commit `data/knowledge.db`.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F4. FAQ and how-to blocks in the frontmatter.** Source: astgl-site
 `src/content.config.ts`. FAQ answers carry facts and go stale too, but asking a model
 (possibly a 7B one) to rewrite YAML risks a page that fails the build.
 *Recommendation:* in this change the frontmatter is copied byte-for-byte except
 `date`; only the markdown body is rewritten. FAQ refresh is a later change.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F5. How the job learns that a rewrite merged or was rejected.** Source: intent Q1
 answer (the job never pushes, so no forge API is involved).
@@ -60,7 +60,7 @@ job: if its recorded commit is reachable from `origin/main`, it is `published`; 
 local branch no longer exists and the commit is not on `main`, it is `rejected` (James
 rejects by deleting the branch or closing the PR and deleting the branch). No other
 state is kept outside git and `rewrite_jobs`.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F6. Why the same article was queued up to four times.** Source: CLAUDE.md Mistake
 #11, `src/db-rewrite-jobs.ts:62`. The in-flight block only covers rows that already
@@ -70,7 +70,7 @@ exist, but the row is created after a rewrite that can take 15 minutes, and
 before any model call, guarded by a partial unique index on `article_url` for open
 statuses, so a second run or a forced URL fails to claim instead of duplicating.
 
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F7. The live checkout the scheduled task runs is not on `main`.** Source: CLAUDE.md
 Mistake #1; ClaudeClaw task prompt `cd ~/Projects/mcp-astgl-knowledge && ...
@@ -82,14 +82,14 @@ side branch.
 change merged and `npm run build` run, verified by `git rev-parse` and a `dist/`
 grep. How to move that checkout (its uncommitted `knowledge.db` must stay uncommitted)
 is James's step, written as a run sheet in plan.md.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 **F8. Policy skills not applied here.** Source: /spec step 2. `security-review` and
 `gstack-cso` review a diff, and there is no diff yet; `design:ux-copy` was not loaded
 this session.
 *Recommendation:* run `security-review` on the PR diff before Codex review, and
 review the notification copy (R9) with `design:ux-copy` at that point.
-*James:* pending.
+*James:* accepted the recommendation (2026-11-03).
 
 ## Requirements
 
@@ -215,5 +215,5 @@ reactivation request, not this code change.
 
 ## Open questions
 
-- F1–F8 resolutions (James).
+- F1–F8: resolved 2026-11-03 (James accepted all eight recommendations).
 - Slack workspace and channel for the webhook (James, when creating it).
