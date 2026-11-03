@@ -1,9 +1,9 @@
 ---
 change: 2026-11-03-astgl-local-rewrite
-status: draft
+status: accepted
 track: T2
 author: james
-accepted_by:
+accepted_by: james
 linear: ASTGL-69
 source: conversation
 ---
