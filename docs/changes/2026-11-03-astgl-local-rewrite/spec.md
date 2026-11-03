@@ -1,9 +1,9 @@
 ---
 change: 2026-11-03-astgl-local-rewrite
-status: draft
+status: accepted
 track: T2
 intent: ./intent.md
-accepted_by:
+accepted_by: james
 linear: ASTGL-69
 skills_in_force: [astgl-db-surgeon, astgl-new-job]
 claude_config_sha: 46f3fb5
