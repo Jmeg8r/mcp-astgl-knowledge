@@ -15,8 +15,9 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
    structuring (Ollama), nightly draft ingest + reconciler, nightly SecondBrain wiki sync,
    project-docs ingest.
 3. **An AEO ops layer**: query analytics, daily reports, content-gap alerts, freshness
-   tracking, automated citation testing (Perplexity/Claude/ChatGPT APIs), and a rewrite
-   queue (Ollama draft → Claude polish → Telegram approval → Substack publish).
+   tracking, automated citation testing (Perplexity/Claude/ChatGPT APIs), and a weekly
+   answer-page rewrite queue (local Ollama draft + voice passes → claim check → local
+   astgl-site branch → Telegram/Slack notice; James pushes and merges to publish).
 
 ## System map
 
@@ -55,18 +56,21 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 ### External dependencies
 
 - **Ollama** at `localhost:11434`: `nomic-embed-text` (all embeddings, 768-dim) and
-  `qwen3-coder:30b` (classification + rewrite drafts). `gemma4:26b` was **removed**; never
-  reintroduce it as a default.
-- **Anthropic API** (`claude-sonnet-4-6` rewrite polish; `claude-opus-4-7` citation tests),
+  `qwen3-coder:30b` (classification + rewrite drafts), and the rewrite voice model
+  (`OLLAMA_VOICE_MODEL`, chosen from `npm run rewrite-eval`). The rewriter refuses a
+  non-local `OLLAMA_BASE_URL`. `gemma4:26b` was **removed**; never reintroduce it as a
+  default.
+- **Anthropic API** (`claude-opus-4-7` citation tests only; the rewrite path is local-only),
   **Perplexity** (`sonar`), **OpenAI** (`gpt-4o`): keys via pass-cli (Mistake #9).
-- **Telegram bot** (rewrite approvals, shared with claudeclaw), **Discord webhooks**,
-  **Smithery registry** (competitor scan), **npm registry + GitHub releases** (freshness).
+- **Telegram bot** and **Slack incoming webhook** (rewrite review notices, no buttons),
+  **Discord webhooks**, **Smithery registry** (competitor scan), **npm registry + GitHub
+  releases** (freshness; their versions are the rewrite claim check's verified facts).
 - **`/Volumes/Research`** external drive: drafts at `Publishing/ASTGL/Articles/Drafts`, wiki
   at `Brain/SecondBrain/wiki`. May be unmounted (Mistake #5).
 - **Sibling repos referenced by path**: `~/Projects/astgl-site` (ingest source +
-  related-links injection), `~/Projects/astgl-articles/substack` (rewrite drafts out),
-  `~/Projects/macstudio-openclaw-localllm/scripts/substack-sync/sync_to_substack.py`
-  (Substack publisher, hardcoded), and `~/.claude/commands/astgl-publish/voice/humanizer-astgl.md`.
+  related-links injection), the rewrite queue's own astgl-site worktree
+  (`ASTGL_SITE_WORKTREE`, default `.rewrite-site/`, gitignored; the job commits there and
+  never pushes), and `~/.claude/commands/astgl-publish/voice/humanizer-astgl.md`.
 
 ## Conventions — follow these exactly; do not "improve" them
 
@@ -103,8 +107,8 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 
 ## Mistakes you will make here — numbered; `src/` comments cite these numbers
 
-1. **The Stale Dist.** The MCP server (`.mcp.json`), launchd jobs, `rewrite-queue` and
-   `publish-rewrite` run compiled `dist/*.js`, not `tsx`. → A change under `src/` that a
+1. **The Stale Dist.** The MCP server (`.mcp.json`), launchd jobs, `rewrite-queue`,
+   `rewrite-backlog` and `rewrite-eval` run compiled `dist/*.js`, not `tsx`. → A change under `src/` that a
    server or job executes is not done until `npm run build` has run and you have stated
    which runtime (tsx vs dist) you verified against.
 2. **The Destructive Refresh.** `npm run ingest` `DROP TABLE`s articles/chunks/vec_chunks
@@ -153,13 +157,15 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
     committing the result. If asked to commit the database, get an explicit decision; do
     not infer consent from "commit the changes". Do not describe the attributes of withheld
     rows anywhere in this public repo. Details: `docs/publication-gate.md`.
-11. **The Forced Duplicate.** `rewrite-queue --article-url` bypasses the pending-approval/
-    cooldown guard and creates a duplicate Telegram approval. → Before any manual
-    `rewrite-queue` run, check `SELECT article_url, status FROM rewrite_jobs WHERE status IN
-    ('pending_approval','approved')` and do not force a URL already in flight.
+11. **The Forced Duplicate.** Until 2026-11-03 the rewrite job row was created after a
+    rewrite that could take 15 minutes, and `--article-url` skipped the in-flight check, so
+    one article was queued up to four times. → Every rewrite now starts with `claimJob()`,
+    which checks for an open job or cooldown and inserts a `drafting` row inside one
+    `BEGIN IMMEDIATE` transaction; a forced URL is refused like any other. Never write a
+    `rewrite_jobs` row outside `db-rewrite-jobs.ts`.
 12. **The Cost-Blind Loop.** `structure`, `rewrite-queue` and `citation-test-auto` burn GPU
     minutes, paid API tokens, and can message real humans. → Verify with `--dry-run` /
-    `--limit 1` / a copy of the DB first. Anything that posts to Telegram, Discord or
+    `--limit 1` / a copy of the DB first. Anything that posts to Telegram, Slack, Discord or
     Substack gets one deliberate run, never a retry loop.
 13. **The Patched Instance.** Each fix is correct; the sequence is the failure. → After the
     FIRST instance of a defect class, name the class out loud and grep for every member
@@ -245,7 +251,8 @@ actual data before designing anything (`tasks/lessons.md`).
 - **Backups** — `docs/backup-retention.md`: schema age, not calendar age, is the expiry.
 - **Known drift** — `docs/known-drift.md` (dated; fix opportunistically, never trust).
   Standing items: set `ASTGL_DRAFTS_DIR` explicitly (the historical default divergence is
-  resolved: `ingest-drafts`, `reconcile-drafts` and `rewrite-queue` now share one default);
+  resolved: `ingest-drafts` and `reconcile-drafts` share one default; `rewrite-queue` no
+  longer writes there);
   `overrides: { tmp }` in package.json is a workaround to remove once mcpb's chain allows
   tmp ≥ 0.2.6 (check with `npm audit`, not version numbers); Asana is retired here.
 
