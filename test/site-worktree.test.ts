@@ -13,10 +13,8 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
 
 import {
   commitPage,
@@ -26,65 +24,13 @@ import {
   staleCandidates,
   type AnswerPage,
 } from "../src/site-worktree.js";
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
-}
-
-function page(date: string, body = "Body text."): string {
-  return `---\ntitle: Example\ndescription: Example page\ndate: '${date}'\norder: 1\n---\n\n${body}\n`;
-}
-
-interface Fixture {
-  root: string;
-  origin: string;
-  seed: string;
-  wt: string;
-}
-
-// Each fixture repo points core.hooksPath at its own directory so the machine's
-// global hooks never run in tests and a test can install a hook deliberately.
-function isolateHooks(repo: string, hooksDir: string): void {
-  git(repo, "config", "core.hooksPath", hooksDir);
-}
-
-function withSite(fn: (f: Fixture) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "site-wt-"));
-  const origin = join(root, "origin.git");
-  const seed = join(root, "seed");
-  const wt = join(root, "wt");
-  const hooks = join(root, "hooks");
-  try {
-    mkdirSync(hooks);
-    git(root, "init", "--quiet", "--bare", "--initial-branch=main", origin);
-    git(root, "clone", "--quiet", origin, seed);
-    isolateHooks(seed, hooks);
-    git(seed, "config", "user.email", "test@example.com");
-    git(seed, "config", "user.name", "Test");
-    mkdirSync(join(seed, "src/content/answers"), { recursive: true });
-    mkdirSync(join(seed, "src/pages"), { recursive: true });
-    writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2025-01-10"));
-    writeFileSync(join(seed, "src/content/answers/older-page.md"), page("2024-06-01"));
-    writeFileSync(join(seed, "src/content/answers/fresh-page.md"), page("2026-10-30"));
-    writeFileSync(join(seed, "src/pages/index.astro"), "not an answer page\n");
-    git(seed, "add", ".");
-    git(seed, "commit", "--quiet", "-m", "seed");
-    git(seed, "push", "--quiet", "origin", "main");
-    git(root, "clone", "--quiet", origin, wt);
-    isolateHooks(wt, hooks);
-    git(wt, "config", "user.email", "job@example.com");
-    git(wt, "config", "user.name", "Rewrite Job");
-    fn({ root, origin, seed, wt });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
+import { git, page, withSite } from "./helpers/site-fixture.js";
 
 const NOW = new Date("2026-11-03T12:00:00Z");
 
 describe("listAnswerPages", () => {
   test("lists only answer pages on origin/main, with their dates", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       writeFileSync(join(wt, "src/content/answers/uncommitted.md"), page("2020-01-01"));
       const pages = listAnswerPages(wt).sort((a, b) => a.slug.localeCompare(b.slug));
       assert.deepEqual(
@@ -124,7 +70,7 @@ describe("staleCandidates", () => {
 
 describe("commitPage", () => {
   test("commits the page on a new branch from origin/main and pushes nothing", () => {
-    withSite(({ wt, origin }) => {
+    return withSite(({ wt, origin }) => {
       const result = commitPage(wt, "old-page", page("2026-11-03", "New body."), "2026-11-03", "rewrite message");
       assert.equal(result.branch, "rewrite/old-page-2026-11-03");
       assert.equal(git(wt, "rev-parse", `${result.commit}^`), git(wt, "rev-parse", "origin/main"));
@@ -138,7 +84,7 @@ describe("commitPage", () => {
   });
 
   test("runs the repository's commit hooks", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       const marker = join(wt, "..", "hook-ran");
       const hook = join(wt, "..", "hooks", "pre-commit");
       writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`);
@@ -149,7 +95,7 @@ describe("commitPage", () => {
   });
 
   test("a hook refusal leaves no branch and a clean worktree", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       const hook = join(wt, "..", "hooks", "pre-commit");
       writeFileSync(hook, "#!/bin/sh\nexit 1\n");
       chmodSync(hook, 0o755);
@@ -160,7 +106,7 @@ describe("commitPage", () => {
   });
 
   test("refuses when the branch already exists", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
       git(wt, "switch", "--quiet", "--detach", "origin/main");
       assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"));
@@ -168,14 +114,14 @@ describe("commitPage", () => {
   });
 
   test("refuses a dirty worktree", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       writeFileSync(join(wt, "stray.txt"), "left behind\n");
       assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"), /not clean/);
     });
   });
 
   test("refuses a page that is not on origin/main", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       assert.throws(() => commitPage(wt, "no-such-page", page("2026-11-03"), "2026-11-03", "msg"));
     });
   });
@@ -183,7 +129,7 @@ describe("commitPage", () => {
 
 describe("resolveJob", () => {
   test("open while the branch exists and is not merged", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
       fetchSite(wt);
       assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "open");
@@ -191,7 +137,7 @@ describe("resolveJob", () => {
   });
 
   test("published once the commit is merged into origin/main", () => {
-    withSite(({ wt, seed }) => {
+    return withSite(({ wt, seed }) => {
       const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
       git(wt, "push", "--quiet", "origin", r.branch);
       git(seed, "fetch", "--quiet", "origin");
@@ -203,7 +149,7 @@ describe("resolveJob", () => {
   });
 
   test("published when a squash merge left the page identical", () => {
-    withSite(({ wt, seed }) => {
+    return withSite(({ wt, seed }) => {
       const r = commitPage(wt, "old-page", page("2026-11-03", "Squashed."), "2026-11-03", "msg");
       writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-03", "Squashed."));
       git(seed, "commit", "--quiet", "-am", "squash");
@@ -214,7 +160,7 @@ describe("resolveJob", () => {
   });
 
   test("rejected when the branch was deleted without merging", () => {
-    withSite(({ wt }) => {
+    return withSite(({ wt }) => {
       const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
       git(wt, "switch", "--quiet", "--detach", "origin/main");
       git(wt, "branch", "--quiet", "-D", r.branch);
