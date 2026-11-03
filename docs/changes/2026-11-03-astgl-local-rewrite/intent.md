@@ -44,8 +44,9 @@ act on.
 
 ## Proposed outcome
 
-- The queue selects only the 20 `astgl.ai/answers/` pages, the stalest one first,
-  each at most once until its rewrite is merged or rejected.
+- The queue runs weekly and selects only the 20 `astgl.ai/answers/` pages, the
+  stalest one first by the page's `date` frontmatter, each at most once until its
+  rewrite is merged or rejected.
 - Both rewrite passes run on local models only. The model for each pass is chosen
   by measured quality on archived answer pages, not by assumption. Candidates
   include the existing `astgl-voice:7b-v1.5` fine-tune and the larger local
@@ -54,15 +55,22 @@ act on.
   keeping its frontmatter valid against `src/content.config.ts` (title, description,
   date, order, faq, howto, related links), its source attribution and its factual
   claims.
-- Each rewrite is proposed as a pull request on astgl-site. James reviews the diff;
-  **merging is the approval and the publish** (Cloudflare Pages deploys `main`).
-  Rejecting is closing the PR. The Telegram button flow and the Substack publish
-  path are removed.
+- Each rewrite is committed to a local branch in an astgl-site worktree, and the job
+  notifies James. James pushes the branch and opens the pull request; the job never
+  pushes. James reviews the diff; **merging is the approval and the publish**
+  (Cloudflare Pages deploys `main`). Rejecting is closing the PR or deleting the
+  branch. The Telegram button flow and the Substack publish path are removed.
 - A run that fails any item, produces malformed output or cannot open its change
   exits nonzero, so the scheduler records the failure and its existing failure
   audit fires.
 - The 166 stale `pending_approval` rows are closed out so they no longer block or
-  clutter the queue.
+  clutter the queue, under a new `superseded` status (not `rejected`, whose cooldown
+  would hold the pages back):
+  - the 132 rows for non-answer sources are marked `superseded`;
+  - the 34 rows for the 20 answer pages are reviewed by James first (all 34 draft
+    files are present on disk as of 2026-11-03). For each page he keeps at most one
+    draft, which goes through the same local-branch path as a new rewrite; the rest
+    are marked `superseded`. Publishing an existing draft makes no new cloud call.
 
 ## Affected users and systems
 
@@ -122,29 +130,33 @@ act on.
   candidate model: unsupported-claim count, frontmatter validity, length change and
   a repair-burden score, over a stated article count greater than zero. James
   accepts a model on those numbers.
-- One supervised live run opens exactly one astgl-site PR whose page passes
-  `npm run build` in astgl-site, and records the job against that PR.
+- One supervised live run commits exactly one local astgl-site branch whose page
+  passes `npm run build` in astgl-site, records the job against that branch, sends
+  one notification, and pushes nothing (`git -C <astgl-site> ls-remote` shows no new
+  branch until James pushes).
 - `select status, count(*) from rewrite_jobs group by status;` shows no stale
   `pending_approval` rows from before this change.
 
 ## Open questions
 
-1. **Who opens the PR?** (a) The scheduled job pushes a branch and opens the PR
-   itself, which needs a forge token, likely kept in the `ASTGL` vault; or (b) the
-   job commits to a local astgl-site worktree branch and notifies James, who pushes.
-   (a) is fully automatic but adds a credential and an unattended outward action;
-   (b) keeps every push in James's hands.
-2. **How should the 166 old rows close out?** The status enum has no `superseded`;
-   options are a new `superseded` status (a schema change) or `rejected` with an
-   error note. And should any of the 34 existing answer-page drafts be reviewed
-   instead of discarded, given they include a cloud polish?
-3. **Cadence.** With 20 pages and a 90-day staleness bar, is daily still right, or
-   weekly?
-4. **What counts as "stale" for an answer page** now that `last_reviewed_at` is set
-   by a merge rather than a Telegram approval: the page's `date` frontmatter, the
-   merge date, or both?
-5. **Where the archived evaluation set comes from**: the current 20 pages as they
-   are (the rewrite target and the reference at once), or earlier git versions of
-   them in astgl-site.
-6. **Notification.** With Telegram approval gone, does James still want a message
-   when a PR opens, or is the forge's own PR notification enough?
+1. ~~Who opens the PR?~~ **Answered 2026-11-03 (James): the job commits to a local
+   astgl-site worktree branch and notifies; James pushes and opens the PR.** No forge
+   token is added and the job makes no outward push. Revisit only if the manual step
+   becomes a burden.
+2. ~~How should the 166 old rows close out?~~ **Answered 2026-11-03 (James): review
+   the 34 answer-page drafts first; supersede the other 132.** A new `superseded`
+   status, because `rejected` starts a cooldown.
+3. ~~Cadence.~~ **Answered 2026-11-03 (James): weekly, one page per run.**
+4. ~~What counts as "stale".~~ **Answered 2026-11-03 (James): the page's `date`
+   frontmatter in astgl-site**, set to the merge date when a rewrite merges. The
+   candidate query reads staleness from the page files, not from `knowledge.db`.
+5. ~~Evaluation set.~~ **Answered 2026-11-03 (James): earlier versions of the 20
+   pages from astgl-site's git history**, each scored against a later version. If
+   the history is too thin, fall back to current pages with planted stale facts, and
+   say so in the results.
+6. ~~Notification.~~ **Answered 2026-11-03 (James): notify on Telegram and Slack**
+   when a branch is ready, as plain messages with no approval buttons. The forge
+   cannot notify because nothing is pushed. Telegram reuses the existing sender;
+   neither repo has a Slack sender today. The spec must cover the Slack credential
+   (created by James, kept in the `ASTGL` vault), its workspace and channel, and what
+   a failed send on one channel does to the run.
