@@ -81,6 +81,19 @@ describe("checkClaims", () => {
       added: ['"this changed how i work entirely"'],
     },
     {
+      name: "a quote that differs only by curly apostrophes and quotes passes",
+      rewritten: ORIGINAL.replace(
+        '"local models keep your data on your machine"',
+        "\u201clocal models keep your data on your machine\u201d"
+      ) + "\nAs one reader put it, \u201cit\u2019s on your machine, not theirs\u201d.",
+      added: ['"it\'s on your machine, not theirs"'],
+    },
+    {
+      name: "quoting text that was unquoted in the original passes",
+      rewritten: ORIGINAL + '\nThe point: "install Ollama 0.5.1 from https://ollama.com/download and pull a model".',
+      added: [],
+    },
+    {
       name: "renumbered list markers are not claims",
       rewritten: ORIGINAL.replace("1. Install it.\n2. Pull a model.", "1. Install it.\n2. Start it.\n3. Pull a model."),
       added: [],

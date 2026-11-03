@@ -41,16 +41,24 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+// Curly quotes and apostrophes are typography, not content: a rewrite that turns
+// it's into it’s has not changed what the page says.
+function straightenQuotes(text: string): string {
+  return text.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'");
+}
+
+const collapseSpace = (text: string) => text.replace(/\s+/g, " ").trim();
+
 // WHAT: The text's tokens in category order, normalized so formatting changes match.
 // WHY:  Each category is removed from the text once extracted, so a version is not
 //       also counted as numbers and a URL's digits are not counted at all.
 export function extractClaimTokens(text: string): string[] {
-  let rest = text;
+  let rest = straightenQuotes(text);
   const urls = (rest.match(URL_RE) ?? []).map(normalizeUrl);
   rest = rest.replace(URL_RE, " ");
   const versions = (rest.match(VERSION_RE) ?? []).map(normalizeVersion);
   rest = rest.replace(VERSION_RE, " ");
-  const quotes = [...rest.matchAll(QUOTE_RE)].map((m) => `"${m[1].trim().toLowerCase()}"`);
+  const quotes = [...rest.matchAll(QUOTE_RE)].map((m) => `"${collapseSpace(m[1]).toLowerCase()}"`);
   rest = rest.replace(QUOTE_RE, " ").replace(LIST_MARKER_RE, "$1");
   const numbers = (rest.match(NUMBER_RE) ?? []).map(normalizeNumber);
   return unique([...urls, ...versions, ...quotes, ...numbers]);
@@ -65,7 +73,16 @@ export function checkClaims(
     ...extractClaimTokens(original),
     ...verifiedFacts.flatMap((fact) => extractClaimTokens(fact)),
   ]);
-  return { added: extractClaimTokens(rewritten).filter((t) => !allowed.has(t)) };
+  // A quoted span is supported when its words already appear in the original, quoted
+  // or not: putting quote marks around the page's own sentence adds no claim. The
+  // original is reduced the same way the quote was (URLs and versions removed,
+  // quotes straightened, whitespace collapsed) so the two compare like for like.
+  const originalProse = collapseSpace(
+    straightenQuotes(original).replace(URL_RE, " ").replace(VERSION_RE, " ")
+  ).toLowerCase();
+  const supported = (token: string) =>
+    allowed.has(token) || (token.startsWith('"') && originalProse.includes(token.slice(1, -1)));
+  return { added: extractClaimTokens(rewritten).filter((t) => !supported(t)) };
 }
 
 // WHAT: The original's version strings and years, for James to verify in review.
