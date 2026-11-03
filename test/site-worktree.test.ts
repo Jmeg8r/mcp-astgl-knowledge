@@ -42,14 +42,23 @@ interface Fixture {
   wt: string;
 }
 
+// Each fixture repo points core.hooksPath at its own directory so the machine's
+// global hooks never run in tests and a test can install a hook deliberately.
+function isolateHooks(repo: string, hooksDir: string): void {
+  git(repo, "config", "core.hooksPath", hooksDir);
+}
+
 function withSite(fn: (f: Fixture) => void): void {
   const root = mkdtempSync(join(tmpdir(), "site-wt-"));
   const origin = join(root, "origin.git");
   const seed = join(root, "seed");
   const wt = join(root, "wt");
+  const hooks = join(root, "hooks");
   try {
+    mkdirSync(hooks);
     git(root, "init", "--quiet", "--bare", "--initial-branch=main", origin);
     git(root, "clone", "--quiet", origin, seed);
+    isolateHooks(seed, hooks);
     git(seed, "config", "user.email", "test@example.com");
     git(seed, "config", "user.name", "Test");
     mkdirSync(join(seed, "src/content/answers"), { recursive: true });
@@ -62,6 +71,7 @@ function withSite(fn: (f: Fixture) => void): void {
     git(seed, "commit", "--quiet", "-m", "seed");
     git(seed, "push", "--quiet", "origin", "main");
     git(root, "clone", "--quiet", origin, wt);
+    isolateHooks(wt, hooks);
     git(wt, "config", "user.email", "job@example.com");
     git(wt, "config", "user.name", "Rewrite Job");
     fn({ root, origin, seed, wt });
@@ -130,11 +140,22 @@ describe("commitPage", () => {
   test("runs the repository's commit hooks", () => {
     withSite(({ wt }) => {
       const marker = join(wt, "..", "hook-ran");
-      const hook = join(wt, ".git/hooks/pre-commit");
+      const hook = join(wt, "..", "hooks", "pre-commit");
       writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`);
       chmodSync(hook, 0o755);
       commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
       assert.ok(existsSync(marker));
+    });
+  });
+
+  test("a hook refusal leaves no branch and a clean worktree", () => {
+    withSite(({ wt }) => {
+      const hook = join(wt, "..", "hooks", "pre-commit");
+      writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+      chmodSync(hook, 0o755);
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"));
+      assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
+      assert.equal(git(wt, "status", "--porcelain"), "");
     });
   });
 
