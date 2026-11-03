@@ -113,6 +113,11 @@ describe("rewritePage", () => {
     await assert.rejects(rewritePage(PAGE, opts, deps), /malformed/);
   });
 
+  test("fails when the model wraps its own frontmatter in a fence", async () => {
+    responses = ["Draft body.", "```yaml\n---\ntitle: Model title\n---\nBody\n```"];
+    await assert.rejects(rewritePage(PAGE, opts, deps), /malformed/);
+  });
+
   test("strips delimiters the model echoed around a good body", async () => {
     responses = ["---\nDraft body.\n---", "<body>\n# Title\n\nBody.\n</body>"];
     const out = await rewritePage(PAGE, opts, deps);

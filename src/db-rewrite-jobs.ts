@@ -130,6 +130,18 @@ export function markSitePublished(db: InstanceType<typeof Database>, jobId: numb
   ).run(new Date().toISOString(), jobId);
 }
 
+function cutoffSql(cutoff: Date): string {
+  return cutoff.toISOString().replace("T", " ").slice(0, 19);
+}
+
+// WHAT: How many 'drafting' rows a failAbandonedDrafts() call would fail; no write.
+export function countAbandonedDrafts(db: InstanceType<typeof Database>, cutoff: Date): number {
+  return db
+    .prepare("SELECT count(*) FROM rewrite_jobs WHERE status = 'drafting' AND created_at < ?")
+    .pluck()
+    .get(cutoffSql(cutoff)) as number;
+}
+
 // WHAT: Fail 'drafting' rows older than the cutoff; returns how many changed.
 // WHY:  A run that dies mid-rewrite leaves its claim behind, and an open claim blocks
 //       the article forever. A real rewrite finishes within one run, so a claim
@@ -139,13 +151,12 @@ export function failAbandonedDrafts(
   db: InstanceType<typeof Database>,
   cutoff: Date
 ): number {
-  const cutoffSql = cutoff.toISOString().replace("T", " ").slice(0, 19);
   return db
     .prepare(
       `UPDATE rewrite_jobs SET status = 'failed', error = 'abandoned draft (run did not finish)'
        WHERE status = 'drafting' AND created_at < ?`
     )
-    .run(cutoffSql).changes;
+    .run(cutoffSql(cutoff)).changes;
 }
 
 // WHAT: Close named pending_approval jobs as superseded; returns how many changed.

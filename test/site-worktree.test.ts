@@ -168,6 +168,34 @@ describe("resolveJob", () => {
     });
   });
 
+  test("published when review edits on the branch were squash-merged", () => {
+    return withSite(({ wt, seed }) => {
+      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg");
+      git(wt, "switch", "--quiet", r.branch);
+      writeFileSync(join(wt, "src/content/answers/old-page.md"), page("2026-11-03", "Corrected in review."));
+      git(wt, "commit", "--quiet", "-am", "review fix");
+      git(wt, "switch", "--quiet", "--detach", "origin/main");
+      writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-03", "Corrected in review."));
+      git(seed, "commit", "--quiet", "-am", "squash");
+      git(seed, "push", "--quiet", "origin", "main");
+      fetchSite(wt);
+      assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "published");
+    });
+  });
+
+  test("superseded when main's page changed in a way the job cannot explain", () => {
+    return withSite(({ wt, seed }) => {
+      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg");
+      writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-04", "Edited in the forge."));
+      git(seed, "commit", "--quiet", "-am", "squash with web edits");
+      git(seed, "push", "--quiet", "origin", "main");
+      fetchSite(wt);
+      assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "superseded");
+      git(wt, "branch", "--quiet", "-D", r.branch);
+      assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "superseded");
+    });
+  });
+
   test("rejected when the branch was deleted without merging", () => {
     return withSite(({ wt }) => {
       const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");

@@ -98,23 +98,23 @@ function localOllamaBaseUrl(): string {
   return base;
 }
 
-// WHAT: Refuse output that carries its own YAML frontmatter, then strip wrappers the
-//       model echoed (a ```markdown fence, the <body> tags, lone `---` lines at the
-//       start or end), then refuse empty output.
+// WHAT: Strip wrappers the model echoed (a ```markdown fence, the <body> tags),
+//       refuse output that carries its own YAML frontmatter, then strip lone `---`
+//       lines at the start or end and refuse empty output.
 // WHY:  The first real evaluation run (2026-11-03) showed the draft model echoing the
 //       prompt's delimiters around an otherwise good body. A real frontmatter block
 //       (`---` then `key: value` lines) is still refused: only the site's own
 //       frontmatter may reach the page.
 function cleanModelOutput(text: string, pass: string): string {
   let out = text.trim();
+  const fenced = out.match(/^```(?:markdown|md|yaml)?\n([\s\S]*?)\n```$/);
+  if (fenced) out = fenced[1].trim();
+  out = out.replace(/^<\/?body>\s*/i, "").replace(/\s*<\/body>$/i, "").trim();
+  // Checked after unwrapping, so frontmatter inside a fence or tags is still caught.
   if (/^---\n(?:[\w-]+:.*\n)+---/.test(out)) {
     throw new Error(`${pass} pass returned malformed output (frontmatter)`);
   }
-  const fenced = out.match(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/);
-  if (fenced) out = fenced[1].trim();
   out = out
-    .replace(/^<\/?body>\s*/i, "")
-    .replace(/\s*<\/body>$/i, "")
     .replace(/^---\s*\n/, "")
     .replace(/\n---\s*$/, "")
     .trim();

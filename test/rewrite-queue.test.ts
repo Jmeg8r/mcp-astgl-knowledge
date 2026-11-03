@@ -132,7 +132,7 @@ describe("runQueue", () => {
   test("a version from the verified-facts table is allowed", () =>
     withSite(({ wt }) =>
       withDb(async (db) => {
-        upsertSnapshot(db, "npm_version_check", "@modelcontextprotocol/sdk", "0.9.4");
+        upsertSnapshot(db, "npm_version", "@modelcontextprotocol/sdk", "0.9.4");
         const h = harness(db, wt, {}, "Body text. Now on 0.9.4.");
         const run = await runQueue(h.deps);
         assert.equal(run.exitCode, 0);
@@ -201,6 +201,19 @@ describe("runQueue", () => {
         assert.equal(run.exitCode, 0);
         assert.equal(jobs(db).length, 0);
         assert.equal(h.rewrites.length, 0);
+      })
+    ));
+
+  test("a dry run reports resolutions without changing job state", () =>
+    withSite(({ wt }) =>
+      withDb(async (db) => {
+        db.prepare(
+          "INSERT INTO rewrite_jobs (article_url, status, created_at) VALUES (?, 'drafting', '2026-11-01 00:00:00')"
+        ).run(OLDER);
+        const h = harness(db, wt, { dryRun: true });
+        const run = await runQueue(h.deps);
+        assert.equal(run.summary.resolved.abandoned, 1);
+        assert.deepEqual(jobs(db).map((j) => j.status), ["drafting"]);
       })
     ));
 

@@ -36,6 +36,10 @@ const PLANTED_FACT_BANK = [
   "Open WebUI 0.3.10 added the pipelines feature this setup relies on.",
 ];
 const FACTS_PER_PAGE = 2;
+// A sentence keeps a planted fact when it holds all of the fact's claim tokens and at
+// least this share of its content words, so a stray "2024" elsewhere does not count.
+const KEPT_WORD_SHARE = 0.5;
+const CONTENT_WORD_MIN_LENGTH = 4;
 
 export interface PageScore {
   slug: string;
@@ -82,6 +86,23 @@ export function plantFacts(body: string, slug: string): { body: string; facts: s
   return { body: paragraphs.join("\n\n"), facts };
 }
 
+function contentWords(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z]+/g) ?? []).filter((w) => w.length >= CONTENT_WORD_MIN_LENGTH);
+}
+
+// WHAT: Whether one sentence of the output still states the planted fact.
+export function factKept(fact: string, outputBody: string): boolean {
+  const tokens = extractClaimTokens(fact);
+  const words = contentWords(fact);
+  const sentences = outputBody.split(/(?<=[.!?])\s+|\n+/);
+  return sentences.some((sentence) => {
+    const sentenceTokens = new Set(extractClaimTokens(sentence));
+    const sentenceWords = new Set(contentWords(sentence));
+    const sharedWords = words.filter((w) => sentenceWords.has(w)).length;
+    return tokens.every((t) => sentenceTokens.has(t)) && sharedWords >= words.length * KEPT_WORD_SHARE;
+  });
+}
+
 export function scorePage(
   original: string,
   facts: string[],
@@ -91,8 +112,7 @@ export function scorePage(
 ): PageScore {
   const orig = splitFrontmatter(original);
   const out = splitFrontmatter(output);
-  const outTokens = new Set(extractClaimTokens(out.body));
-  const plantedKept = facts.filter((f) => extractClaimTokens(f).every((t) => outTokens.has(t))).length;
+  const plantedKept = facts.filter((f) => factKept(f, out.body)).length;
   return {
     slug: "",
     plantedTotal: facts.length,

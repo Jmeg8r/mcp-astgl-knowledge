@@ -39,12 +39,14 @@ import type Database from "better-sqlite3";
 import { initKnowledgeDb } from "./knowledge-db.js";
 import {
   claimJob,
+  countAbandonedDrafts,
   failAbandonedDrafts,
   getBlockedArticleUrls,
   getOpenSiteJobs,
   markFailed,
   markRejected,
   markSitePublished,
+  markSuperseded,
   recordSiteCommit,
 } from "./db-rewrite-jobs.js";
 import {
@@ -73,7 +75,7 @@ const ABANDONED_DRAFT_MS = 2 * 60 * 60 * 1000;
 const ERROR_CHARS = 2000;
 // Only external tool versions count as verified facts; the publish-gap check tracks
 // this package's own version, which no answer page should cite.
-const VERIFIED_FACT_CHECK_TYPES = ["npm_version_check", "github_release_check"];
+const VERIFIED_FACT_CHECK_TYPES = ["npm_version", "github_release"];
 
 export interface QueueDeps {
   db: InstanceType<typeof Database>;
@@ -98,7 +100,7 @@ export interface ItemResult {
 }
 
 export interface QueueSummary {
-  resolved: { published: number; rejected: number; abandoned: number };
+  resolved: { published: number; rejected: number; superseded: number; abandoned: number };
   processed: ItemResult[];
   drained: boolean;
 }
@@ -116,19 +118,23 @@ function verifiedFacts(db: InstanceType<typeof Database>): string[] {
 }
 
 // WHAT: Close out open jobs from git and fail abandoned claims, before selecting.
+// WHY:  A dry run reports what it would resolve and writes nothing: preview mode must
+//       never change job state.
 function resolveOpenJobs(deps: QueueDeps): QueueSummary["resolved"] {
-  const resolved = { published: 0, rejected: 0, abandoned: 0 };
-  resolved.abandoned = failAbandonedDrafts(deps.db, new Date(deps.now.getTime() - ABANDONED_DRAFT_MS));
+  const resolved = { published: 0, rejected: 0, superseded: 0, abandoned: 0 };
+  const cutoff = new Date(deps.now.getTime() - ABANDONED_DRAFT_MS);
+  resolved.abandoned = deps.dryRun
+    ? countAbandonedDrafts(deps.db, cutoff)
+    : failAbandonedDrafts(deps.db, cutoff);
   for (const job of getOpenSiteJobs(deps.db)) {
     const slug = job.article_url.split("/").pop() ?? "";
     const outcome = resolveJob(deps.siteDir, job.site_branch, job.site_commit, `src/content/answers/${slug}.md`);
-    if (outcome === "published") {
-      markSitePublished(deps.db, job.id);
-      resolved.published++;
-    } else if (outcome === "rejected") {
-      markRejected(deps.db, job.id);
-      resolved.rejected++;
-    }
+    if (outcome === "open") continue;
+    resolved[outcome]++;
+    if (deps.dryRun) continue;
+    if (outcome === "published") markSitePublished(deps.db, job.id);
+    else if (outcome === "rejected") markRejected(deps.db, job.id);
+    else markSuperseded(deps.db, [job.id]);
   }
   return resolved;
 }
@@ -306,7 +312,8 @@ async function main(): Promise<void> {
     console.error(
       `\n=== Done: ${summary.processed.filter((r) => r.status === "drafted").length} drafted, ` +
         `${summary.processed.filter((r) => r.status === "failed").length} failed, ` +
-        `${summary.resolved.published} published, ${summary.resolved.rejected} rejected ===`
+        `${summary.resolved.published} published, ${summary.resolved.rejected} rejected, ` +
+        `${summary.resolved.superseded} superseded ===`
     );
     process.exitCode = exitCode;
   } finally {

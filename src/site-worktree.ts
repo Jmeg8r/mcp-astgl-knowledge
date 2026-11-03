@@ -32,7 +32,7 @@ export interface SiteCommit {
   pagePath: string; // absolute path in the worktree
 }
 
-export type JobResolution = "open" | "published" | "rejected";
+export type JobResolution = "open" | "published" | "rejected" | "superseded";
 
 function git(dir: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -139,20 +139,38 @@ export function commitPage(
   return { branch, commit, pagePath };
 }
 
+function blobAt(dir: string, ref: string, relPath: string): string | null {
+  try {
+    return git(dir, "rev-parse", `${ref}:${relPath}`);
+  } catch {
+    return null;
+  }
+}
+
 // WHAT: Where an open job stands, read from git after a fetch.
-// WHY:  A merge commit makes the job's commit an ancestor of origin/main; a squash
-//       merge with no review edits leaves the page byte-identical. Either is
-//       published. A deleted local branch with neither is James's rejection.
+// WHY:  Published: the job's commit (or the reviewed branch tip, local or pushed)
+//       is merged, or main now holds the exact page one of them holds — a squash
+//       merge, with or without review edits made on the branch. Superseded: main's
+//       page changed since the rewrite's base in a way none of the job's versions
+//       explain (edits made only in the forge, or an unrelated change); the job is
+//       stale either way, so it closes without the rejection cooldown and never
+//       blocks the page. Rejected: the branch is gone and main's page is still the
+//       rewrite's base. Otherwise the review is still open.
 export function resolveJob(
   dir: string,
   branch: string,
   commit: string,
   relPath: string
 ): JobResolution {
-  if (gitSucceeds(dir, "merge-base", "--is-ancestor", commit, MAIN_REF)) return "published";
-  if (git(dir, "rev-parse", `${commit}:${relPath}`) === git(dir, "rev-parse", `${MAIN_REF}:${relPath}`)) {
-    return "published";
-  }
-  if (!gitSucceeds(dir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)) return "rejected";
-  return "open";
+  const localTip = `refs/heads/${branch}`;
+  const remoteTip = `refs/remotes/origin/${branch}`;
+  const branchExists = gitSucceeds(dir, "rev-parse", "--verify", "--quiet", localTip);
+  const tips = [commit, ...(branchExists ? [localTip] : [])];
+  if (gitSucceeds(dir, "rev-parse", "--verify", "--quiet", remoteTip)) tips.push(remoteTip);
+
+  if (tips.some((tip) => gitSucceeds(dir, "merge-base", "--is-ancestor", tip, MAIN_REF))) return "published";
+  const mainPage = blobAt(dir, MAIN_REF, relPath);
+  if (mainPage !== null && tips.some((tip) => blobAt(dir, tip, relPath) === mainPage)) return "published";
+  if (mainPage !== blobAt(dir, `${commit}^`, relPath)) return "superseded";
+  return branchExists ? "open" : "rejected";
 }

@@ -13,7 +13,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { plantFacts, runEval, scorePage, summarize, type PageScore } from "../src/rewrite-eval.js";
+import { factKept, plantFacts, runEval, scorePage, summarize, type PageScore } from "../src/rewrite-eval.js";
 import type { RewriteResult } from "../src/rewriter.js";
 import { withSite } from "./helpers/site-fixture.js";
 
@@ -46,6 +46,12 @@ describe("scorePage", () => {
     const s = scorePage(original, planted.facts, output, "2026-11-03", 1000);
     assert.equal(s.plantedKept, 0);
     assert.ok(s.added.includes("9.9.9"));
+  });
+
+  test("a fact counts as kept only where one sentence still states it", () => {
+    const fact = "The MCP specification was first published in November 2024.";
+    assert.equal(factKept(fact, "Intro. The MCP spec first appeared, published November 2024."), true);
+    assert.equal(factKept(fact, "Intro. Pricing changed in 2024. Nothing about the spec."), false);
   });
 
   test("a frontmatter change other than date is caught", () => {
