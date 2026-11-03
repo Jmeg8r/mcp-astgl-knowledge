@@ -1,53 +1,251 @@
 #!/usr/bin/env tsx
 /**
- * Daily ASTGL stale-article rewrite queue.
+ * Weekly ASTGL answer-page rewrite queue (local models only).
  *
- * WHAT: Picks the oldest stale article (subject to in-flight + cooldown filters),
- *       runs the two-pass rewriter, writes the draft to disk, inserts a row in
- *       rewrite_jobs, and posts a Telegram approval message with inline buttons.
+ * WHAT: Resolves open rewrites against astgl-site, picks the stalest astgl.ai answer
+ *       page, claims it, rewrites its body on local Ollama models, runs the claim
+ *       check, commits the page to a new LOCAL branch in the job's astgl-site
+ *       worktree, and sends one review notice to Telegram and Slack.
  *
- * WHY:  Drains the 67-article freshness backlog automatically while keeping the
- *       human in the loop on publish.
+ * WHY:  Keeps the 20 answer pages fresh while James stays the only path to
+ *       publication: he pushes the branch, opens the PR, and merging publishes
+ *       (2026-11-03-astgl-local-rewrite). The job never pushes and makes no cloud
+ *       model call.
  *
  * Usage:
- *   npm run rewrite-queue                        # picks 1 article, full pipeline
- *   npm run rewrite-queue:dev -- --dry-run       # picks but does not call models
- *   npm run rewrite-queue:dev -- --limit 3       # process up to 3 articles
- *   npm run rewrite-queue:dev -- --article-url <url>  # force a specific article
+ *   npm run rewrite-queue                          # one page, full pipeline
+ *   npm run rewrite-queue:dev -- --dry-run         # list the pick; no claim, no model
+ *   npm run rewrite-queue:dev -- --limit 2         # up to 2 pages
+ *   npm run rewrite-queue:dev -- --article-url <url>  # a specific answer page
+ *
+ * Exit codes: 0 every item drafted (or nothing to do) and every notice sent;
+ *             1 any item failed, any notice failed, or a forced URL was refused.
  *
  * Env:
- *   ANTHROPIC_API_KEY            (required for live runs)
- *   OLLAMA_BASE_URL              (default http://localhost:11434)
- *   OLLAMA_REWRITE_MODEL         (default qwen3:32b-fast)
- *   ASTGL_DRAFTS_DIR             (default /Volumes/Research/Publishing/ASTGL/Articles/Drafts)
- *   TELEGRAM_BOT_TOKEN           (required to send approval pings; skipped if absent)
- *   TELEGRAM_CHAT_ID             (single chat id for the approval ping)
- *   TELEGRAM_THREAD_ID           (optional forum-topic thread id)
+ *   ASTGL_SITE_WORKTREE    the job's astgl-site worktree (default: <repo>/.rewrite-site)
+ *   OLLAMA_BASE_URL        local Ollama host (default http://localhost:11434; must be local)
+ *   OLLAMA_REWRITE_MODEL   draft pass model (default qwen3-coder:30b)
+ *   OLLAMA_VOICE_MODEL     voice pass model (default astgl-voice:7b-v1.5)
+ *   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID (optional)
+ *   SLACK_WEBHOOK_URL      Slack incoming webhook (a credential)
  */
 
 import "dotenv/config";
+import { existsSync } from "fs";
 import { join } from "path";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
-import {
-  initKnowledgeDb,
-  getStaleArticles,
-  assembleArticleBody,
-  type StaleArticleRow,
-} from "./knowledge-db.js";
-import {
-  createRewriteJob,
-  getBlockedArticleUrls,
-  setTelegramRouting,
-  markFailed,
-} from "./db-rewrite-jobs.js";
-import { rewriteArticle, type RewriteInput } from "./rewriter.js";
+import { pathToFileURL } from "url";
+import type Database from "better-sqlite3";
 
-// WHAT: Rewrite drafts are written under the Research drive drafts archive.
-// WHY:  The drafts archive was relocated off the repo (substack retired,
-//       2026-07-13) to /Volumes/Research/Publishing/ASTGL/Articles/Drafts — canonical for
-//       the whole draft pipeline (ingest + reconcile share this default).
-//       Override with ASTGL_DRAFTS_DIR if the path differs.
-const DEFAULT_DRAFTS_DIR = "/Volumes/Research/Publishing/ASTGL/Articles/Drafts";
+import { initKnowledgeDb } from "./knowledge-db.js";
+import {
+  claimJob,
+  failAbandonedDrafts,
+  getBlockedArticleUrls,
+  getOpenSiteJobs,
+  markFailed,
+  markRejected,
+  markSitePublished,
+  recordSiteCommit,
+} from "./db-rewrite-jobs.js";
+import {
+  DEFAULT_DRAFT_MODEL,
+  DEFAULT_VOICE_MODEL,
+  rewritePage,
+  splitFrontmatter,
+  type RewriteOptions,
+  type RewriteResult,
+} from "./rewriter.js";
+import { checkClaims, datedFacts } from "./claim-check.js";
+import {
+  commitPage,
+  fetchSite,
+  listAnswerPages,
+  readMainPage,
+  resolveJob,
+  staleCandidates,
+  type AnswerPage,
+} from "./site-worktree.js";
+import { notifyAll, type ChannelResult } from "./notify.js";
+
+const STALE_THRESHOLD_DAYS = 90;
+// A real rewrite finishes within one run; a claim older than this was abandoned.
+const ABANDONED_DRAFT_MS = 2 * 60 * 60 * 1000;
+const ERROR_CHARS = 2000;
+// Only external tool versions count as verified facts; the publish-gap check tracks
+// this package's own version, which no answer page should cite.
+const VERIFIED_FACT_CHECK_TYPES = ["npm_version_check", "github_release_check"];
+
+export interface QueueDeps {
+  db: InstanceType<typeof Database>;
+  siteDir: string;
+  now: Date;
+  limit: number;
+  articleUrl: string | null;
+  dryRun: boolean;
+  draftModel: string;
+  voiceModel: string;
+  rewrite: (page: string, opts: RewriteOptions) => Promise<RewriteResult>;
+  notify: (text: string) => Promise<ChannelResult[]>;
+}
+
+export interface ItemResult {
+  url: string;
+  job_id: number | null;
+  branch: string | null;
+  status: "drafted" | "would_rewrite" | "refused" | "failed";
+  error?: string;
+  notices?: ChannelResult[];
+}
+
+export interface QueueSummary {
+  resolved: { published: number; rejected: number; abandoned: number };
+  processed: ItemResult[];
+  drained: boolean;
+}
+
+function errorText(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, ERROR_CHARS);
+}
+
+function verifiedFacts(db: InstanceType<typeof Database>): string[] {
+  const placeholders = VERIFIED_FACT_CHECK_TYPES.map(() => "?").join(",");
+  return db
+    .prepare(`SELECT current_version FROM ecosystem_snapshots WHERE check_type IN (${placeholders})`)
+    .pluck()
+    .all(...VERIFIED_FACT_CHECK_TYPES) as string[];
+}
+
+// WHAT: Close out open jobs from git and fail abandoned claims, before selecting.
+function resolveOpenJobs(deps: QueueDeps): QueueSummary["resolved"] {
+  const resolved = { published: 0, rejected: 0, abandoned: 0 };
+  resolved.abandoned = failAbandonedDrafts(deps.db, new Date(deps.now.getTime() - ABANDONED_DRAFT_MS));
+  for (const job of getOpenSiteJobs(deps.db)) {
+    const slug = job.article_url.split("/").pop() ?? "";
+    const outcome = resolveJob(deps.siteDir, job.site_branch, job.site_commit, `src/content/answers/${slug}.md`);
+    if (outcome === "published") {
+      markSitePublished(deps.db, job.id);
+      resolved.published++;
+    } else if (outcome === "rejected") {
+      markRejected(deps.db, job.id);
+      resolved.rejected++;
+    }
+  }
+  return resolved;
+}
+
+function reviewNotice(page: AnswerPage, branch: string, siteDir: string, facts: string[]): string {
+  return [
+    `ASTGL rewrite ready for review: ${page.slug}`,
+    `Page: ${page.url}`,
+    `Branch: ${branch} (local only, not pushed)`,
+    facts.length > 0
+      ? `Check these dated facts before merging: ${facts.join(", ")}`
+      : "No dated facts found to check.",
+    "",
+    "To publish, push the branch and open a PR:",
+    `git -C ${siteDir} push origin ${branch}`,
+    "To reject, delete the branch (and close the PR if you opened one).",
+  ].join("\n");
+}
+
+async function processPage(deps: QueueDeps, page: AnswerPage, facts: string[]): Promise<ItemResult> {
+  if (deps.dryRun) {
+    console.error(`  [dry-run] would rewrite: ${page.url} (dated ${page.date})`);
+    return { url: page.url, job_id: null, branch: null, status: "would_rewrite" };
+  }
+
+  const claim = claimJob(deps.db, page.url, deps.now);
+  if (!claim.ok) {
+    console.error(`  claim refused for ${page.url}: ${claim.reason}`);
+    return { url: page.url, job_id: null, branch: null, status: "refused", error: claim.reason };
+  }
+
+  const date = deps.now.toISOString().slice(0, 10);
+  try {
+    const original = readMainPage(deps.siteDir, page.path);
+    const result = await deps.rewrite(original, {
+      draftModel: deps.draftModel,
+      voiceModel: deps.voiceModel,
+      date,
+    });
+
+    const added = checkClaims(splitFrontmatter(original).body, splitFrontmatter(result.page).body, facts).added;
+    if (added.length > 0) {
+      throw new Error(`claim check: rewrite added unsupported tokens: ${added.join(", ")}`);
+    }
+
+    const toCheck = datedFacts(splitFrontmatter(original).body);
+    const message = [
+      `content(answers): local rewrite of ${page.slug}`,
+      "",
+      `Rewritten by the weekly rewrite queue (job ${claim.id}) on local models`,
+      `${deps.draftModel} and ${deps.voiceModel}. Facts are unchanged from the original.`,
+      toCheck.length > 0 ? `Check these dated facts before merging: ${toCheck.join(", ")}` : "",
+    ].join("\n");
+    const site = commitPage(deps.siteDir, page.slug, result.page, date, message);
+    recordSiteCommit(deps.db, claim.id, site.branch, site.commit, site.pagePath);
+    console.error(`  committed ${site.branch} (${site.commit.slice(0, 8)})`);
+
+    const notices = await deps.notify(reviewNotice(page, site.branch, deps.siteDir, toCheck));
+    const failed = notices.filter((n) => !n.ok);
+    for (const n of failed) console.error(`  ${n.channel} notice failed: ${n.ok ? "" : n.error}`);
+    return {
+      url: page.url,
+      job_id: claim.id,
+      branch: site.branch,
+      status: "drafted",
+      notices,
+      ...(failed.length > 0 ? { error: "one or more notices failed" } : {}),
+    };
+  } catch (err) {
+    const message = errorText(err);
+    console.error(`  rewrite failed for ${page.url}: ${message}`);
+    markFailed(deps.db, claim.id, message);
+    return { url: page.url, job_id: claim.id, branch: null, status: "failed", error: message };
+  }
+}
+
+export async function runQueue(deps: QueueDeps): Promise<{ summary: QueueSummary; exitCode: number }> {
+  fetchSite(deps.siteDir);
+  const resolved = resolveOpenJobs(deps);
+  const pages = listAnswerPages(deps.siteDir);
+
+  let picks: AnswerPage[];
+  if (deps.articleUrl) {
+    const forced = pages.find((p) => p.url === deps.articleUrl?.replace(/\/+$/, ""));
+    if (!forced) {
+      console.error(`  not an answer page on origin/main: ${deps.articleUrl}`);
+      const item: ItemResult = { url: deps.articleUrl, job_id: null, branch: null, status: "refused", error: "not an answer page" };
+      return { summary: { resolved, processed: [item], drained: false }, exitCode: 1 };
+    }
+    picks = [forced];
+  } else {
+    const blocked = new Set(getBlockedArticleUrls(deps.db));
+    picks = staleCandidates(pages, deps.now, STALE_THRESHOLD_DAYS, blocked).slice(0, deps.limit);
+  }
+
+  if (picks.length === 0) {
+    console.error("  nothing to rewrite: no stale, unblocked answer page");
+    return { summary: { resolved, processed: [], drained: true }, exitCode: 0 };
+  }
+
+  const facts = verifiedFacts(deps.db);
+  const processed: ItemResult[] = [];
+  for (const page of picks) {
+    console.error(`\nprocessing: ${page.url} (dated ${page.date})`);
+    processed.push(await processPage(deps, page, facts));
+  }
+
+  // A refusal fails the run only for a forced URL: an unforced pick was unblocked a
+  // moment ago, so its refusal means another run claimed it first.
+  const failed = processed.some(
+    (r) =>
+      r.status === "failed" ||
+      r.error === "one or more notices failed" ||
+      (r.status === "refused" && deps.articleUrl !== null)
+  );
+  return { summary: { resolved, processed, drained: false }, exitCode: failed ? 1 : 0 };
+}
 
 interface CliFlags {
   dryRun: boolean;
@@ -73,323 +271,54 @@ function parseArgs(): CliFlags {
   return { dryRun, limit, articleUrl };
 }
 
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-}
-
-function buildFrontmatter(
-  input: RewriteInput,
-  jobId: number,
-  rewrittenAt: string
-): string {
-  const yearMonth = rewrittenAt.slice(0, 7);
-  const updatedTitle = input.title.includes("(Updated")
-    ? input.title
-    : `${input.title} (Updated ${yearMonth})`;
-  const description = (input.description ?? "Rewritten for freshness.")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, " ")
-    .trim()
-    .slice(0, 240);
-
-  return [
-    "---",
-    `title: "${updatedTitle.replace(/"/g, '\\"')}"`,
-    `description: "${description}"`,
-    `original_url: "${input.url}"`,
-    `original_pub_date: "${input.pub_date ?? "unknown"}"`,
-    `rewritten_at: "${rewrittenAt}"`,
-    `rewrite_job_id: ${jobId}`,
-    `voice: astgl`,
-    "---",
-    "",
-  ].join("\n");
-}
-
-interface TelegramSendResult {
-  message_id: number;
-  chat_id: string;
-  thread_id: number | null;
-}
-
-async function sendTelegramApproval(
-  jobId: number,
-  input: RewriteInput,
-  draftPath: string,
-  output: { ollama_chars: number; claude_chars: number; ollama_ms: number; claude_ms: number }
-): Promise<TelegramSendResult | null> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  const threadId = process.env.TELEGRAM_THREAD_ID
-    ? parseInt(process.env.TELEGRAM_THREAD_ID, 10)
-    : null;
-
-  if (!token || !chatId) {
-    console.error(
-      "  TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping approval ping"
-    );
-    return null;
-  }
-
-  const ageDays = input.pub_date
-    ? Math.floor(
-        (Date.now() - new Date(input.pub_date).getTime()) / (1000 * 60 * 60 * 24)
-      )
-    : null;
-
-  const body = [
-    `📝 Rewrite ready for review (job #${jobId})`,
-    ``,
-    `Title: ${input.title}`,
-    `Original URL: ${input.url}`,
-    ageDays !== null ? `Original age: ${ageDays} days` : null,
-    ``,
-    `Draft: ${draftPath}`,
-    `Sizes: ollama ${output.ollama_chars}c (${(output.ollama_ms / 1000).toFixed(1)}s)`,
-    `       claude ${output.claude_chars}c (${(output.claude_ms / 1000).toFixed(1)}s)`,
-    ``,
-    `Tap Approve to publish to Substack as a draft.`,
-  ]
-    .filter((l) => l !== null)
-    .join("\n");
-
-  const reply_markup = {
-    inline_keyboard: [
-      [
-        { text: "✅ Approve", callback_data: `astgl-rw:approve:${jobId}` },
-        { text: "❌ Reject", callback_data: `astgl-rw:reject:${jobId}` },
-      ],
-      [{ text: "📄 View draft", callback_data: `astgl-rw:view:${jobId}` }],
-    ],
-  };
-
-  const payload: Record<string, unknown> = {
-    chat_id: chatId,
-    text: body,
-    reply_markup,
-  };
-  if (threadId !== null) payload.message_thread_id = threadId;
-
-  const resp = await fetch(
-    `https://api.telegram.org/bot${token}/sendMessage`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  if (!resp.ok) {
-    const errBody = await resp.text();
-    throw new Error(
-      `telegram sendMessage failed: ${resp.status} ${errBody.slice(0, 300)}`
-    );
-  }
-
-  const data = (await resp.json()) as {
-    ok: boolean;
-    result?: { message_id: number };
-    description?: string;
-  };
-  if (!data.ok || !data.result) {
-    throw new Error(`telegram sendMessage rejected: ${data.description ?? "unknown"}`);
-  }
-  return { message_id: data.result.message_id, chat_id: chatId, thread_id: threadId };
-}
-
-interface ProcessResult {
-  url: string;
-  title: string;
-  job_id: number | null;
-  draft_path: string | null;
-  status: "drafted" | "skipped" | "failed";
-  error?: string;
-}
-
-async function processArticle(
-  db: ReturnType<typeof initKnowledgeDb>,
-  staleRow: StaleArticleRow,
-  flags: CliFlags
-): Promise<ProcessResult> {
-  const assembled = assembleArticleBody(db, staleRow.url);
-  if (!assembled || !assembled.body) {
-    return {
-      url: staleRow.url,
-      title: staleRow.title,
-      job_id: null,
-      draft_path: null,
-      status: "skipped",
-      error: "no body chunks",
-    };
-  }
-
-  const input: RewriteInput = {
-    title: assembled.title,
-    url: assembled.url,
-    description: assembled.description,
-    pub_date: assembled.pub_date,
-    body: assembled.body,
-  };
-
-  if (flags.dryRun) {
-    console.error(`  [dry-run] would rewrite: ${input.title}`);
-    console.error(`  [dry-run] body chars: ${input.body.length}`);
-    return {
-      url: input.url,
-      title: input.title,
-      job_id: null,
-      draft_path: null,
-      status: "drafted",
-    };
-  }
-
-  // WHAT: Resolve the drafts root and refuse early if it is missing.
-  // WHY:  Check BEFORE the expensive two-pass rewrite so an unmounted Research
-  //       volume doesn't burn a full LLM rewrite per candidate before failing;
-  //       and once unmounted, the mkdirSync(recursive) below would create a
-  //       PHANTOM local dir shadowing the mount point. Fail loudly instead.
-  const draftsDir = process.env.ASTGL_DRAFTS_DIR || DEFAULT_DRAFTS_DIR;
-  if (!existsSync(draftsDir)) {
-    const message = `Drafts root not found: ${draftsDir} — external volume may be unmounted; refusing to rewrite/write draft.`;
-    console.error(`  ${message}`);
-    return {
-      url: input.url,
-      title: input.title,
-      job_id: null,
-      draft_path: null,
-      status: "failed",
-      error: message,
-    };
-  }
-
-  // Two-pass rewrite
-  let output;
-  try {
-    output = await rewriteArticle(input);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`  rewriter error: ${message}`);
-    return {
-      url: input.url,
-      title: input.title,
-      job_id: null,
-      draft_path: null,
-      status: "failed",
-      error: message,
-    };
-  }
-
-  // Write draft to disk (draftsDir validated above, before the rewrite)
-  const today = new Date().toISOString().slice(0, 10);
-  const slug = slugify(input.title) || `rewrite-${Date.now()}`;
-  const dirName = `${today}-rewrite-${slug}`;
-  const dirPath = join(draftsDir, dirName);
-  if (!existsSync(dirPath)) mkdirSync(dirPath, { recursive: true });
-  const draftPath = join(dirPath, "article.md");
-
-  // Insert job row first so we have an ID for the frontmatter
-  const jobId = createRewriteJob(db, input.url, draftPath);
-
-  const rewrittenAt = new Date().toISOString();
-  const frontmatter = buildFrontmatter(input, jobId, rewrittenAt);
-  writeFileSync(draftPath, frontmatter + output.markdown + "\n");
-  console.error(`  draft written: ${draftPath}`);
-
-  // Telegram approval ping
-  try {
-    const sent = await sendTelegramApproval(jobId, input, draftPath, output);
-    if (sent) {
-      setTelegramRouting(db, jobId, sent.chat_id, sent.thread_id, sent.message_id);
-      console.error(`  telegram message ${sent.message_id} sent to ${sent.chat_id}`);
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`  telegram ping failed (job stays pending): ${message}`);
-    markFailed(db, jobId, `telegram ping failed: ${message}`);
-    return {
-      url: input.url,
-      title: input.title,
-      job_id: jobId,
-      draft_path: draftPath,
-      status: "failed",
-      error: message,
-    };
-  }
-
-  return {
-    url: input.url,
-    title: input.title,
-    job_id: jobId,
-    draft_path: draftPath,
-    status: "drafted",
-  };
-}
-
 async function main(): Promise<void> {
   const flags = parseArgs();
-  console.error("=== ASTGL Stale-Article Rewrite Queue ===");
+  const siteDir = process.env.ASTGL_SITE_WORKTREE || join(import.meta.dirname, "..", ".rewrite-site");
+  console.error("=== ASTGL Answer-Page Rewrite Queue (local) ===");
   console.error(
     `mode: ${flags.dryRun ? "DRY-RUN" : "LIVE"}, limit: ${flags.limit}` +
       (flags.articleUrl ? `, article: ${flags.articleUrl}` : "")
   );
-
-  const db = initKnowledgeDb();
-
-  const blocked = getBlockedArticleUrls(db);
-  console.error(`  blocked URLs (in-flight or in-cooldown): ${blocked.length}`);
-
-  let candidates: StaleArticleRow[];
-  if (flags.articleUrl) {
-    const row = db
-      .prepare(
-        `SELECT title, url,
-                COALESCE(last_reviewed_at, pub_date, processed_at) as effective_date
-         FROM articles WHERE url = ?`
-      )
-      .get(flags.articleUrl) as StaleArticleRow | undefined;
-    if (!row) {
-      console.error(`  article not found: ${flags.articleUrl}`);
-      db.close();
-      process.exit(1);
-    }
-    candidates = [row];
-  } else {
-    candidates = getStaleArticles(db, 90, blocked).slice(0, flags.limit);
-  }
-
-  console.error(`  candidates: ${candidates.length}`);
-  if (candidates.length === 0) {
-    console.error("  nothing to rewrite — backlog drained or all blocked");
-    db.close();
-    console.log(JSON.stringify({ processed: [], drained: true }, null, 2));
+  if (!existsSync(join(siteDir, ".git"))) {
+    console.error(`astgl-site worktree not found: ${siteDir}`);
+    process.exitCode = 1;
     return;
   }
 
-  const results: ProcessResult[] = [];
-  for (const row of candidates) {
-    console.error(`\nprocessing: ${row.title}`);
-    console.error(`  url: ${row.url}`);
-    console.error(`  effective_date: ${row.effective_date}`);
-    const result = await processArticle(db, row, flags);
-    results.push(result);
+  const db = initKnowledgeDb();
+  try {
+    const { summary, exitCode } = await runQueue({
+      db,
+      siteDir,
+      now: new Date(),
+      limit: flags.limit,
+      articleUrl: flags.articleUrl,
+      dryRun: flags.dryRun,
+      draftModel: process.env.OLLAMA_REWRITE_MODEL || DEFAULT_DRAFT_MODEL,
+      voiceModel: process.env.OLLAMA_VOICE_MODEL || DEFAULT_VOICE_MODEL,
+      rewrite: (page, opts) => rewritePage(page, opts),
+      notify: (text) => notifyAll(text, process.env),
+    });
+    console.log(JSON.stringify(summary, null, 2));
+    console.error(
+      `\n=== Done: ${summary.processed.filter((r) => r.status === "drafted").length} drafted, ` +
+        `${summary.processed.filter((r) => r.status === "failed").length} failed, ` +
+        `${summary.resolved.published} published, ${summary.resolved.rejected} rejected ===`
+    );
+    process.exitCode = exitCode;
+  } finally {
+    db.close();
   }
-
-  db.close();
-  console.log(JSON.stringify({ processed: results, drained: false }, null, 2));
-  console.error(
-    `\n=== Done: ${results.filter((r) => r.status === "drafted").length} drafted, ` +
-      `${results.filter((r) => r.status === "failed").length} failed, ` +
-      `${results.filter((r) => r.status === "skipped").length} skipped ===`
-  );
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
+// WHY no process.exit(): it can cut off an async stdout pipe before the JSON
+//      summary drains; setting exitCode lets node exit once stdout is flushed.
+const isEntryPoint =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  main().catch((err) => {
     console.error("rewrite-queue failed:", err);
-    process.exit(1);
+    process.exitCode = 1;
   });
+}

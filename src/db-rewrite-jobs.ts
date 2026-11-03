@@ -104,6 +104,50 @@ export function recordSiteCommit(
   }
 }
 
+export interface OpenSiteJob {
+  id: number;
+  article_url: string;
+  site_branch: string;
+  site_commit: string;
+}
+
+// WHAT: Jobs awaiting James's review that carry a local astgl-site commit.
+// WHY:  Legacy rows (no site commit) cannot be resolved from git; the backlog tool
+//       closes those instead.
+export function getOpenSiteJobs(db: InstanceType<typeof Database>): OpenSiteJob[] {
+  return db
+    .prepare(
+      `SELECT id, article_url, site_branch, site_commit FROM rewrite_jobs
+       WHERE status = 'pending_approval' AND site_commit IS NOT NULL AND site_branch IS NOT NULL
+       ORDER BY id`
+    )
+    .all() as OpenSiteJob[];
+}
+
+export function markSitePublished(db: InstanceType<typeof Database>, jobId: number): void {
+  db.prepare(
+    `UPDATE rewrite_jobs SET status = 'published', published_at = ? WHERE id = ?`
+  ).run(new Date().toISOString(), jobId);
+}
+
+// WHAT: Fail 'drafting' rows older than the cutoff; returns how many changed.
+// WHY:  A run that dies mid-rewrite leaves its claim behind, and an open claim blocks
+//       the article forever. A real rewrite finishes within one run, so a claim
+//       older than the cutoff is abandoned. created_at is SQLite's UTC
+//       "YYYY-MM-DD HH:MM:SS", compared in that same form.
+export function failAbandonedDrafts(
+  db: InstanceType<typeof Database>,
+  cutoff: Date
+): number {
+  const cutoffSql = cutoff.toISOString().replace("T", " ").slice(0, 19);
+  return db
+    .prepare(
+      `UPDATE rewrite_jobs SET status = 'failed', error = 'abandoned draft (run did not finish)'
+       WHERE status = 'drafting' AND created_at < ?`
+    )
+    .run(cutoffSql).changes;
+}
+
 // WHAT: Close named pending_approval jobs as superseded; returns how many changed.
 // WHY:  Clears the never-reviewable backlog without the rejection cooldown that
 //       'rejected' would start (intent Q2). Other statuses are left untouched.
@@ -121,30 +165,6 @@ export function markSuperseded(
     .run(...jobIds).changes;
 }
 
-export function createRewriteJob(
-  db: InstanceType<typeof Database>,
-  articleUrl: string,
-  draftPath: string
-): number {
-  const result = db
-    .prepare(
-      `INSERT INTO rewrite_jobs (article_url, status, draft_path)
-       VALUES (?, 'pending_approval', ?)`
-    )
-    .run(articleUrl, draftPath);
-  return result.lastInsertRowid as number;
-}
-
-export function getJob(
-  db: InstanceType<typeof Database>,
-  jobId: number
-): RewriteJob | null {
-  const row = db
-    .prepare("SELECT * FROM rewrite_jobs WHERE id = ?")
-    .get(jobId) as RewriteJob | undefined;
-  return row ?? null;
-}
-
 // WHAT: Return URLs that have an open rewrite job or are inside their reject cooldown.
 // WHY:  rewrite-queue.ts uses this to skip articles that shouldn't be re-queued.
 export function getBlockedArticleUrls(
@@ -157,41 +177,6 @@ export function getBlockedArticleUrls(
     )
     .all(nowIso) as Array<{ article_url: string }>;
   return rows.map((r) => r.article_url);
-}
-
-export function setTelegramRouting(
-  db: InstanceType<typeof Database>,
-  jobId: number,
-  chatId: string,
-  threadId: number | null,
-  messageId: number
-): void {
-  db.prepare(
-    `UPDATE rewrite_jobs
-     SET telegram_chat_id = ?, telegram_thread_id = ?, telegram_message_id = ?
-     WHERE id = ?`
-  ).run(chatId, threadId, messageId, jobId);
-}
-
-export function markApproved(
-  db: InstanceType<typeof Database>,
-  jobId: number
-): void {
-  db.prepare(
-    `UPDATE rewrite_jobs SET status = 'approved', approved_at = ? WHERE id = ?`
-  ).run(new Date().toISOString(), jobId);
-}
-
-export function markPublished(
-  db: InstanceType<typeof Database>,
-  jobId: number,
-  substackUrl: string
-): void {
-  db.prepare(
-    `UPDATE rewrite_jobs
-     SET status = 'published', published_at = ?, substack_url = ?
-     WHERE id = ?`
-  ).run(new Date().toISOString(), substackUrl, jobId);
 }
 
 // WHAT: Mark a job rejected and set a cooldown so the article doesn't get re-queued

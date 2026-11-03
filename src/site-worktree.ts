@@ -71,6 +71,10 @@ export function listAnswerPages(dir: string): AnswerPage[] {
   });
 }
 
+export function readMainPage(dir: string, relPath: string): string {
+  return execFileSync("git", ["show", `${MAIN_REF}:${relPath}`], { cwd: dir, encoding: "utf-8" });
+}
+
 // WHAT: Pages whose date is older than the threshold, oldest first, minus blocked URLs.
 // WHY:  An unparseable date is dropped rather than treated as infinitely stale, so a
 //       malformed page cannot monopolize the queue; the build would catch it anyway.

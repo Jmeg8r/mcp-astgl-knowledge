@@ -355,63 +355,6 @@ export function getStaleArticles(
   return database.prepare(sql).all(staleDateStr, ...excludeUrls) as StaleArticleRow[];
 }
 
-// WHAT: Return the assembled markdown body for an article by reading its chunks.
-// WHY: Articles table holds metadata only; the actual prose lives in `chunks`.
-//      The rewriter needs the original text as input.
-export interface AssembledArticle {
-  title: string;
-  url: string;
-  description: string | null;
-  pub_date: string | null;
-  body: string;
-}
-
-export function assembleArticleBody(
-  database: InstanceType<typeof Database>,
-  articleUrl: string
-): AssembledArticle | null {
-  const article = database
-    .prepare(
-      "SELECT title, url, description, pub_date FROM articles WHERE url = ?"
-    )
-    .get(articleUrl) as
-    | { title: string; url: string; description: string | null; pub_date: string | null }
-    | undefined;
-
-  if (!article) return null;
-
-  const chunks = database
-    .prepare(
-      `SELECT section_heading, chunk_type, content
-       FROM chunks
-       WHERE article_url = ?
-       ORDER BY article_order ASC`
-    )
-    .all(articleUrl) as Array<{
-    section_heading: string | null;
-    chunk_type: string | null;
-    content: string;
-  }>;
-
-  const parts: string[] = [];
-  let currentHeading: string | null = null;
-  for (const chunk of chunks) {
-    if (chunk.section_heading && chunk.section_heading !== currentHeading) {
-      currentHeading = chunk.section_heading;
-      parts.push(`## ${chunk.section_heading}`);
-    }
-    parts.push(chunk.content);
-  }
-
-  return {
-    title: article.title,
-    url: article.url,
-    description: article.description,
-    pub_date: article.pub_date,
-    body: parts.join("\n\n").trim(),
-  };
-}
-
 // WHAT: Insert or replace an article in knowledge.db
 // WHY: Keyed on url so discovered content can coexist with local articles
 export function upsertArticle(

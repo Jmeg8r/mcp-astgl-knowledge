@@ -1,15 +1,18 @@
 /**
- * Two-pass article rewriter.
+ * Local two-pass answer-page rewriter.
  *
- * Pass 1 — Ollama (qwen3-coder:30b) generates a structurally faithful rewrite,
- * updating tool versions, deprecated APIs, and stale references.
+ * Pass 1 — a local draft model rewrites the page body for clarity and structure,
+ * keeping every fact as written.
  *
- * Pass 2 — Claude Sonnet 4.6 polishes the draft against the ASTGL voice
- * profile. The voice profile is sent as a cached system prompt so repeat
- * runs only pay for the user-prompt tokens.
+ * Pass 2 — a local voice model rewrites the draft against the ASTGL voice profile.
  *
- * Pure: no DB writes, no filesystem side effects, no Telegram. Caller is
- * responsible for those.
+ * Both passes run on the local Ollama host only (2026-09-24 decision; spec R4). Only
+ * the markdown body reaches a model: the frontmatter is copied byte-for-byte except
+ * `date` (spec F4). Facts are not updated from model memory; the caller runs the
+ * claim check on the result (spec F1).
+ *
+ * Pure apart from the Ollama calls and the voice-profile read: no DB writes, no
+ * filesystem writes, no notifications. Caller is responsible for those.
  */
 
 import { readFile } from "fs/promises";
@@ -25,226 +28,193 @@ const VOICE_PROFILE_PATH = join(
   "humanizer-astgl.md"
 );
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_REWRITE_MODEL = process.env.OLLAMA_REWRITE_MODEL || "qwen3-coder:30b";
-const CLAUDE_MODEL = process.env.CLAUDE_REWRITE_MODEL || "claude-sonnet-4-6";
-const ANTHROPIC_API_VERSION = "2023-06-01";
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+export const DEFAULT_DRAFT_MODEL = "qwen3-coder:30b";
+export const DEFAULT_VOICE_MODEL = "astgl-voice:7b-v1.5";
 
-export interface RewriteInput {
-  title: string;
-  url: string;
-  description: string | null;
-  pub_date: string | null;
-  body: string;
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 3000;
+// 15 min — local models can be slow; fresh signal each attempt.
+const REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+// Generous output budget — long-form answer pages run ~2-4K tokens.
+const NUM_PREDICT = 6000;
+
+export interface RewriteOptions {
+  draftModel: string;
+  voiceModel: string;
+  date: string; // YYYY-MM-DD, written to the frontmatter `date`
 }
 
-export interface RewriteOutput {
-  markdown: string;
-  ollama_chars: number;
-  claude_chars: number;
-  ollama_ms: number;
-  claude_ms: number;
+export interface RewriteDeps {
+  loadVoiceProfile: () => Promise<string>;
 }
 
-let cachedVoiceProfile: string | null = null;
-
-async function loadVoiceProfile(): Promise<string> {
-  if (cachedVoiceProfile) return cachedVoiceProfile;
-  cachedVoiceProfile = await readFile(VOICE_PROFILE_PATH, "utf-8");
-  return cachedVoiceProfile;
+export interface RewriteResult {
+  page: string;
+  originalBody: string;
+  draftChars: number;
+  voiceChars: number;
+  draftMs: number;
+  voiceMs: number;
 }
 
-// WHAT: Ollama draft pass via /api/generate.
-// WHY:  Per project memory, /api/chat returns 503 / empty content for some
-//       models on Ollama 0.20+. /api/generate is the reliable surface.
-async function ollamaDraft(input: RewriteInput): Promise<{ text: string; ms: number }> {
-  const prompt = [
-    "You are rewriting an article from the As The Geek Learns (ASTGL) blog.",
-    "",
-    `Original title: ${input.title}`,
-    `Original publish date: ${input.pub_date ?? "unknown"}`,
-    `Original URL: ${input.url}`,
-    "",
-    "Your job: produce a faithful rewrite that preserves the article's structure, key claims, and overall length, but corrects anything that has gone stale:",
-    "  - Update tool version numbers (e.g. Ollama, MCP SDK, Open WebUI) to current values where you can do so confidently.",
-    "  - Replace deprecated APIs with current ones.",
-    "  - Fix or note broken / outdated references.",
-    "  - Keep the heading structure and paragraph order unless an update demands a small change.",
-    "",
-    "Do NOT invent benchmarks, statistics, or quotes that weren't in the original. Do NOT change the article's thesis. If you are not sure a fact is current, leave the original wording intact rather than guessing.",
-    "",
-    "Return only the rewritten markdown body — no preamble, no commentary, no code-fence wrapping.",
-    "",
-    "ORIGINAL ARTICLE BODY:",
-    "---",
-    input.body,
-    "---",
-  ].join("\n");
+const defaultDeps: RewriteDeps = {
+  loadVoiceProfile: () => readFile(VOICE_PROFILE_PATH, "utf-8"),
+};
 
+// WHAT: Split a page into its frontmatter block (delimiters and the newline after
+//       the closing `---` included) and the body, so frontmatter + body === page.
+export function splitFrontmatter(page: string): { frontmatter: string; body: string } {
+  const match = page.match(/^---\n[\s\S]*?\n---\n/);
+  if (!match) throw new Error("page has no frontmatter block");
+  return { frontmatter: match[0], body: page.slice(match[0].length) };
+}
+
+// WHAT: Replace the frontmatter `date:` value, keeping its quoting style.
+export function setFrontmatterDate(frontmatter: string, date: string): string {
+  const dateLine = /^date:(\s*)(['"]?)[^'"\n]*\2\s*$/m;
+  if (!dateLine.test(frontmatter)) throw new Error("frontmatter has no date line");
+  return frontmatter.replace(
+    dateLine,
+    (_line, space: string, quote: string) => `date:${space}${quote}${date}${quote}`
+  );
+}
+
+// WHAT: The Ollama base URL, refused unless it points at this machine.
+// WHY:  OLLAMA_BASE_URL is the one setting that could send page text to a remote
+//       host; checking it here keeps the local-only rule from resting on config.
+function localOllamaBaseUrl(): string {
+  const base = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
+  const host = new URL(base).hostname;
+  if (!LOCAL_HOSTS.has(host)) {
+    throw new Error(`OLLAMA_BASE_URL must point at a local host, got ${host}`);
+  }
+  return base;
+}
+
+// WHAT: Strip a ```markdown fence the model wrapped the whole answer in, then
+//       refuse output that is empty or carries its own frontmatter.
+function cleanModelOutput(text: string, pass: string): string {
+  let out = text.trim();
+  const fenced = out.match(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/);
+  if (fenced) out = fenced[1].trim();
+  if (!out) throw new Error(`${pass} pass returned empty output`);
+  if (out.startsWith("---")) throw new Error(`${pass} pass returned malformed output (frontmatter)`);
+  return out;
+}
+
+// WHAT: One generation via /api/generate, retried on connection-level failures.
+// WHY:  Per project memory, /api/chat returns 503 / empty content for some models
+//       on Ollama 0.20+; /api/generate is the reliable surface. The Mac Studio host
+//       juggles 20-65GB models, so a cold load can refuse or reset the socket — a
+//       bare `TypeError: fetch failed` that a short backoff fixes. HTTP errors and
+//       the timeout are not retried: 4xx/5xx are deterministic, and a genuine
+//       15-minute stall is not fixed by trying again.
+async function ollamaGenerate(
+  baseUrl: string,
+  model: string,
+  prompt: string
+): Promise<{ text: string; ms: number }> {
   const requestBody = JSON.stringify({
-    model: OLLAMA_REWRITE_MODEL,
+    model,
     prompt,
     stream: false,
-    options: {
-      // Generous output budget — long-form ASTGL articles run ~2-4K tokens.
-      num_predict: 6000,
-      temperature: 0.5,
-    },
+    options: { num_predict: NUM_PREDICT, temperature: 0.5 },
   });
 
-  // WHAT: retry the Ollama call on connection-level failures.
-  // WHY:  The Mac Studio Ollama host juggles 20-65GB models, so a rewrite that
-  //       cold-loads qwen3-coder:30b can have its socket refused or reset mid-
-  //       swap, surfacing as a bare `TypeError: fetch failed` (the exact symptom
-  //       that failed the daily rewrite-queue). That is transient — a short
-  //       backoff lets the load finish, then the retry succeeds. We do NOT retry
-  //       HTTP errors (4xx/5xx are deterministic) or the AbortSignal timeout (a
-  //       genuine 15-min stall is not fixed by trying again).
-  const MAX_ATTEMPTS = 3;
   const start = Date.now();
   let resp: Awaited<ReturnType<typeof fetch>> | undefined;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      resp = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+      resp = await fetch(`${baseUrl}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: requestBody,
-        // 15 min — local models can be slow; fresh signal each attempt.
-        signal: AbortSignal.timeout(15 * 60 * 1000),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       break;
     } catch (err) {
       const isTimeout =
-        err instanceof Error &&
-        (err.name === "TimeoutError" || err.name === "AbortError");
+        err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
       if (isTimeout || attempt === MAX_ATTEMPTS) throw err;
-      const waitMs = 3000 * attempt;
+      const waitMs = RETRY_BASE_MS * attempt;
       console.error(
         `  ollama fetch attempt ${attempt}/${MAX_ATTEMPTS} failed ` +
-          `(${err instanceof Error ? err.message : String(err)}); ` +
-          `retrying in ${waitMs}ms`
+          `(${err instanceof Error ? err.message : String(err)}); retrying in ${waitMs}ms`
       );
       await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
   }
-  // The loop either breaks with a response or throws on the final attempt;
-  // this guard just narrows the type for the checks below.
-  if (!resp) {
-    throw new Error("ollama draft failed: exhausted retries with no response");
-  }
+  if (!resp) throw new Error(`ollama ${model} failed: exhausted retries with no response`);
 
   const ms = Date.now() - start;
-
   if (!resp.ok) {
     const errBody = await resp.text();
-    throw new Error(`ollama draft failed: ${resp.status} ${errBody.slice(0, 500)}`);
+    throw new Error(`ollama ${model} failed: ${resp.status} ${errBody.slice(0, 500)}`);
   }
-
   const data = (await resp.json()) as { response?: string; error?: string };
-  if (data.error) {
-    throw new Error(`ollama draft error: ${data.error}`);
-  }
-  const text = (data.response ?? "").trim();
-  if (!text) {
-    throw new Error("ollama draft returned empty response");
-  }
-  return { text, ms };
+  if (data.error) throw new Error(`ollama ${model} error: ${data.error}`);
+  return { text: data.response ?? "", ms };
 }
 
-// WHAT: Claude polish pass with prompt caching on the voice profile.
-// WHY:  The voice profile is ~150 lines and identical every run — caching it
-//       cuts token spend by ~60% per polish call after the first warm-up.
-async function claudePolish(
-  input: RewriteInput,
-  ollamaDraftText: string
-): Promise<{ text: string; ms: number }> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY is not set");
-  }
-  const voiceProfile = await loadVoiceProfile();
-
-  const userPrompt = [
-    `Polish this rewritten ASTGL article to match the voice profile above.`,
+function draftPrompt(body: string): string {
+  return [
+    "You are revising an answer page from the As The Geek Learns (ASTGL) site.",
     "",
-    `Original article URL: ${input.url}`,
-    `Original publish date: ${input.pub_date ?? "unknown"}`,
-    `Original title: ${input.title}`,
+    "Rewrite it for clarity and flow: tighten wordy sentences, fix awkward structure, and keep the heading structure and section order.",
     "",
-    "Rules for the polish pass:",
-    "  - Apply every voice rule: eliminate AI markers, vary sentence length, lean into senior-engineer tone.",
-    "  - Preserve all factual content from the draft. Do not add new claims, statistics, or examples.",
-    "  - Preserve the markdown heading structure unless a heading is genuinely awkward.",
-    "  - Keep the article roughly the same length; do not pad.",
-    "  - Return ONLY the polished markdown — no preamble, no \"Here is the polished version\" line, no code fences.",
+    "Keep every fact exactly as written. Do NOT change, add or remove any version number, statistic, date, URL, product name or quotation, even if you believe it is out of date. Do NOT add examples, benchmarks or claims that are not in the original.",
     "",
-    "DRAFT TO POLISH:",
+    "Return only the rewritten markdown body: no preamble, no commentary, no frontmatter, no code-fence wrapping.",
+    "",
+    "ORIGINAL BODY:",
     "---",
-    ollamaDraftText,
+    body,
     "---",
   ].join("\n");
-
-  const start = Date.now();
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_API_VERSION,
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 8000,
-      system: [
-        {
-          type: "text",
-          text: voiceProfile,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: userPrompt,
-        },
-      ],
-    }),
-    signal: AbortSignal.timeout(5 * 60 * 1000),
-  });
-
-  const ms = Date.now() - start;
-
-  if (!resp.ok) {
-    const errBody = await resp.text();
-    throw new Error(
-      `claude polish failed: ${resp.status} ${errBody.slice(0, 500)}`
-    );
-  }
-
-  const data = (await resp.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-    error?: { message?: string };
-  };
-  if (data.error) {
-    throw new Error(`claude polish error: ${data.error.message ?? "unknown"}`);
-  }
-
-  const textBlock = (data.content ?? []).find((b) => b.type === "text");
-  const text = (textBlock?.text ?? "").trim();
-  if (!text) {
-    throw new Error("claude polish returned empty content");
-  }
-  return { text, ms };
 }
 
-export async function rewriteArticle(input: RewriteInput): Promise<RewriteOutput> {
-  const draft = await ollamaDraft(input);
-  const polished = await claudePolish(input, draft.text);
+function voicePrompt(voiceProfile: string, draft: string): string {
+  return [
+    voiceProfile,
+    "",
+    "Rewrite the article body below to match the voice profile above.",
+    "",
+    "Rules:",
+    "  - Apply the voice rules: remove AI markers, vary sentence length, keep the senior-engineer tone.",
+    "  - Keep every fact, number, version, date, URL and quotation exactly as written. Add nothing new.",
+    "  - Keep the markdown heading structure and roughly the same length.",
+    "  - Return ONLY the markdown body: no preamble, no frontmatter, no code fences.",
+    "",
+    "BODY:",
+    "---",
+    draft,
+    "---",
+  ].join("\n");
+}
+
+export async function rewritePage(
+  page: string,
+  opts: RewriteOptions,
+  deps: RewriteDeps = defaultDeps
+): Promise<RewriteResult> {
+  const baseUrl = localOllamaBaseUrl();
+  const { frontmatter, body } = splitFrontmatter(page);
+  const newFrontmatter = setFrontmatterDate(frontmatter, opts.date);
+
+  const draft = await ollamaGenerate(baseUrl, opts.draftModel, draftPrompt(body));
+  const draftText = cleanModelOutput(draft.text, "draft");
+  const voiceProfile = await deps.loadVoiceProfile();
+  const voiced = await ollamaGenerate(baseUrl, opts.voiceModel, voicePrompt(voiceProfile, draftText));
+  const voicedText = cleanModelOutput(voiced.text, "voice");
+
   return {
-    markdown: polished.text,
-    ollama_chars: draft.text.length,
-    claude_chars: polished.text.length,
-    ollama_ms: draft.ms,
-    claude_ms: polished.ms,
+    page: `${newFrontmatter}\n${voicedText}\n`,
+    originalBody: body,
+    draftChars: draftText.length,
+    voiceChars: voicedText.length,
+    draftMs: draft.ms,
+    voiceMs: voiced.ms,
   };
 }

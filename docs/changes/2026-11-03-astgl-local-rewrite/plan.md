@@ -120,3 +120,20 @@ shows nothing new, exit 0).
   keeps the migration independent of the backlog cleanup. Verified on a copy of the
   live database: integrity `ok`, 177 rows before and after, legacy-column hash
   identical, migration run twice.
+- **Steps 4 and 6 land in one commit (2026-11-03).** The runner is the rewriter's
+  only caller, so committing the new rewriter alone would leave `rewrite-queue.ts`
+  importing a deleted function and the tree failing to typecheck. Their failing
+  tests were still committed first, separately.
+- **Cloud-reference check narrowed (2026-11-03).** The spec's
+  `rg ... src/` check matches `src/citation-test-auto.ts`, the separate citation
+  pipeline that this change does not touch. The check now covers the rewrite path:
+  `rewriter.ts`, `rewrite-queue.ts`, `claim-check.ts`, `site-worktree.ts`,
+  `notify.ts`, `db-rewrite-jobs.ts`.
+- **Abandoned claims (2026-11-03).** Added `failAbandonedDrafts()`: a `drafting`
+  row older than two hours is failed before selection, so a crashed run cannot
+  block an article forever. Not in the spec; found while writing the runner tests.
+- **Non-local Ollama refused (2026-11-03).** `rewritePage()` refuses an
+  `OLLAMA_BASE_URL` that is not localhost, so the local-only rule does not rest on
+  configuration.
+- **Removed helpers left unused by this change:** `createRewriteJob`, `getJob`,
+  `setTelegramRouting`, `markApproved`, `markPublished`, `assembleArticleBody`.
