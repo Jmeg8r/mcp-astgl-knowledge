@@ -133,7 +133,7 @@ function resolveOpenJobs(deps: QueueDeps): QueueSummary["resolved"] {
   return resolved;
 }
 
-function reviewNotice(page: AnswerPage, branch: string, siteDir: string, facts: string[]): string {
+export function reviewNotice(page: AnswerPage, branch: string, siteDir: string, facts: string[]): string {
   return [
     `ASTGL rewrite ready for review: ${page.slug}`,
     `Page: ${page.url}`,
