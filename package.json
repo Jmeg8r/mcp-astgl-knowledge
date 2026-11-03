@@ -30,6 +30,7 @@
     "rewrite-queue": "pass-cli run --env-file .env -- node dist/rewrite-queue.js",
     "rewrite-queue:dev": "pass-cli run --env-file .env -- tsx src/rewrite-queue.ts",
     "rewrite-backlog": "pass-cli run --env-file .env -- node dist/rewrite-backlog.js",
+    "rewrite-eval": "node dist/rewrite-eval.js",
     "sync-wiki": "tsx src/sync-wiki.ts",
     "reclassify-wiki": "tsx src/sync-wiki.ts --reclassify",
     "prune-backups": "tsx src/prune-backups.ts",

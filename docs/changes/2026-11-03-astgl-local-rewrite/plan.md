@@ -137,3 +137,9 @@ shows nothing new, exit 0).
   configuration.
 - **Removed helpers left unused by this change:** `createRewriteJob`, `getJob`,
   `setTelegramRouting`, `markApproved`, `markPublished`, `assembleArticleBody`.
+- **Evaluation fixtures (2026-11-03).** Instead of committing copies of the 20 pages
+  under `test/fixtures/rewrite-eval/`, the harness reads them live from the
+  astgl-site worktree's `origin/main` and plants stale facts in code
+  (`plantFacts()`, deterministic per slug). Copies would drift from the real pages
+  and add nothing, since the pages are public. `rewrite-eval` needs no secrets, so
+  its script is not wrapped in `pass-cli`.
