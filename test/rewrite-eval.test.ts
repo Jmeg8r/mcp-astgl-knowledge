@@ -65,6 +65,11 @@ describe("summarize", () => {
     assert.equal(summarize("pair", []).verdict, "UNKNOWN");
   });
 
+  test("a pair whose every rewrite failed is UNKNOWN", () => {
+    const failed: PageScore = { slug: "a", plantedTotal: 2, plantedKept: 0, added: [], frontmatterOk: false, lengthRatio: 0, seconds: 0, error: "model not found" };
+    assert.equal(summarize("pair", [failed, { ...failed, slug: "b" }]).verdict, "UNKNOWN");
+  });
+
   test("counts pages with violations, kept facts and errors", () => {
     const scores: PageScore[] = [
       { slug: "a", plantedTotal: 2, plantedKept: 2, added: [], frontmatterOk: true, lengthRatio: 1, seconds: 10 },

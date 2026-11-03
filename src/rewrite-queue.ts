@@ -62,7 +62,8 @@ import {
   commitPage,
   fetchSite,
   listAnswerPages,
-  readMainPage,
+  mainRevision,
+  readPageAt,
   resolveJob,
   staleCandidates,
   type AnswerPage,
@@ -171,7 +172,8 @@ async function processPage(deps: QueueDeps, page: AnswerPage, facts: string[]): 
 
   const date = deps.now.toISOString().slice(0, 10);
   try {
-    const original = readMainPage(deps.siteDir, page.path);
+    const base = mainRevision(deps.siteDir);
+    const original = readPageAt(deps.siteDir, base, page.path);
     const result = await deps.rewrite(original, {
       draftModel: deps.draftModel,
       voiceModel: deps.voiceModel,
@@ -191,7 +193,7 @@ async function processPage(deps: QueueDeps, page: AnswerPage, facts: string[]): 
       `${deps.draftModel} and ${deps.voiceModel}. Facts are unchanged from the original.`,
       toCheck.length > 0 ? `Check these dated facts before merging: ${toCheck.join(", ")}` : "",
     ].join("\n");
-    const site = commitPage(deps.siteDir, page.slug, result.page, date, message);
+    const site = commitPage(deps.siteDir, page.slug, result.page, date, message, base);
     recordSiteCommit(deps.db, claim.id, site.branch, site.commit, site.pagePath);
     console.error(`  committed ${site.branch} (${site.commit.slice(0, 8)})`);
 

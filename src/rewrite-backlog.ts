@@ -29,7 +29,7 @@ import { initKnowledgeDb } from "./knowledge-db.js";
 import { claimJob, markSuperseded, recordSiteCommit } from "./db-rewrite-jobs.js";
 import { setFrontmatterDate, splitFrontmatter } from "./rewriter.js";
 import { checkClaims, datedFacts } from "./claim-check.js";
-import { commitPage, fetchSite, listAnswerPages, readMainPage } from "./site-worktree.js";
+import { commitPage, fetchSite, listAnswerPages, mainRevision, readPageAt } from "./site-worktree.js";
 import { notifyAll, type ChannelResult } from "./notify.js";
 import { reviewNotice } from "./rewrite-queue.js";
 
@@ -124,7 +124,8 @@ export async function keepDraft(db: InstanceType<typeof Database>, opts: KeepOpt
   const page = listAnswerPages(opts.siteDir).find((p) => p.url === row.article_url.replace(/\/+$/, ""));
   if (!page) return { exitCode: 1, error: `no answer page on origin/main for ${row.article_url}` };
 
-  const original = readMainPage(opts.siteDir, page.path);
+  const base = mainRevision(opts.siteDir);
+  const original = readPageAt(opts.siteDir, base, page.path);
   const { frontmatter, body: originalBody } = splitFrontmatter(original);
   const draftBody = splitFrontmatter(readFileSync(row.draft_path, "utf-8")).body.trim();
   const added = checkClaims(originalBody, draftBody).added;
@@ -149,7 +150,7 @@ export async function keepDraft(db: InstanceType<typeof Database>, opts: KeepOpt
   const supersededIds = legacyPendingRows(db)
     .filter((r) => r.article_url === row.article_url)
     .map((r) => r.id);
-  const site = commitPage(opts.siteDir, page.slug, newPage, date, message);
+  const site = commitPage(opts.siteDir, page.slug, newPage, date, message, base);
   markSuperseded(db, supersededIds);
   const claim = claimJob(db, page.url, opts.now);
   if (!claim.ok) return { exitCode: 1, branch: site.branch, error: `claim refused after commit: ${claim.reason}` };

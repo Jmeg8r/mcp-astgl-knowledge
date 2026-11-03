@@ -71,8 +71,15 @@ export function listAnswerPages(dir: string): AnswerPage[] {
   });
 }
 
-export function readMainPage(dir: string, relPath: string): string {
-  return execFileSync("git", ["show", `${MAIN_REF}:${relPath}`], { cwd: dir, encoding: "utf-8" });
+// WHAT: The commit origin/main points at now. Callers read the page at this revision
+//       and branch from it, so a fetch during the minutes-long rewrite cannot move the
+//       base under them (a newer main would otherwise have its edits reverted).
+export function mainRevision(dir: string): string {
+  return git(dir, "rev-parse", MAIN_REF);
+}
+
+export function readPageAt(dir: string, revision: string, relPath: string): string {
+  return execFileSync("git", ["show", `${revision}:${relPath}`], { cwd: dir, encoding: "utf-8" });
 }
 
 // WHAT: Pages whose date is older than the threshold, oldest first, minus blocked URLs.
@@ -131,7 +138,8 @@ function processAlive(pid: number): boolean {
   }
 }
 
-// WHAT: Commit `content` as the page for `slug` on a new branch cut from origin/main.
+// WHAT: Commit `content` as the page for `slug` on a new branch cut from `base`, the
+//       revision the original page was read at.
 // WHY:  Refuses a dirty worktree, an existing branch and an unknown page rather than
 //       guessing. The file is written to a temp name and renamed so a crash never
 //       leaves a half-written page; the branch is the unit James reviews.
@@ -140,9 +148,10 @@ export function commitPage(
   slug: string,
   content: string,
   date: string,
-  message: string
+  message: string,
+  base: string
 ): SiteCommit {
-  return withWorktreeLock(dir, () => commitPageUnlocked(dir, slug, content, date, message));
+  return withWorktreeLock(dir, () => commitPageUnlocked(dir, slug, content, date, message, base));
 }
 
 function commitPageUnlocked(
@@ -150,17 +159,18 @@ function commitPageUnlocked(
   slug: string,
   content: string,
   date: string,
-  message: string
+  message: string,
+  base: string
 ): SiteCommit {
   const relPath = `${ANSWERS_DIR}/${slug}.md`;
   if (git(dir, "status", "--porcelain") !== "") {
     throw new Error(`astgl-site worktree is not clean: ${dir}`);
   }
-  if (!gitSucceeds(dir, "cat-file", "-e", `${MAIN_REF}:${relPath}`)) {
-    throw new Error(`no answer page ${relPath} on ${MAIN_REF}`);
+  if (!gitSucceeds(dir, "cat-file", "-e", `${base}:${relPath}`)) {
+    throw new Error(`no answer page ${relPath} at ${base}`);
   }
   const branch = `rewrite/${slug}-${date}`;
-  git(dir, "switch", "--quiet", "--create", branch, MAIN_REF);
+  git(dir, "switch", "--quiet", "--create", branch, base);
 
   const pagePath = join(dir, relPath);
   const tempPath = `${pagePath}.rewrite-tmp`;

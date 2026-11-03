@@ -222,7 +222,7 @@ describe("runQueue", () => {
       withDb(async (db) => {
         const claim = claimJob(db, OLDER);
         assert.ok(claim.ok);
-        const c = commitPage(wt, "older-page", page("2026-11-03", "Merged."), "2026-11-03", "msg");
+        const c = commitPage(wt, "older-page", page("2026-11-03", "Merged."), "2026-11-03", "msg", "origin/main");
         recordSiteCommit(db, claim.id, c.branch, c.commit, c.pagePath);
         git(wt, "push", "--quiet", "origin", c.branch);
         git(seed, "fetch", "--quiet", "origin");

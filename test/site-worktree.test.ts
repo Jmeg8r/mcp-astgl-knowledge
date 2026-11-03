@@ -71,7 +71,7 @@ describe("staleCandidates", () => {
 describe("commitPage", () => {
   test("commits the page on a new branch from origin/main and pushes nothing", () => {
     return withSite(({ wt, origin }) => {
-      const result = commitPage(wt, "old-page", page("2026-11-03", "New body."), "2026-11-03", "rewrite message");
+      const result = commitPage(wt, "old-page", page("2026-11-03", "New body."), "2026-11-03", "rewrite message", "origin/main");
       assert.equal(result.branch, "rewrite/old-page-2026-11-03");
       assert.equal(git(wt, "rev-parse", `${result.commit}^`), git(wt, "rev-parse", "origin/main"));
       assert.equal(
@@ -85,10 +85,22 @@ describe("commitPage", () => {
 
   test("leaves the worktree detached so James can delete the branch to reject", () => {
     return withSite(({ wt }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       assert.equal(git(wt, "rev-parse", "HEAD"), git(wt, "rev-parse", "origin/main"));
       git(wt, "branch", "--quiet", "-D", r.branch);
       assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
+    });
+  });
+
+  test("branches from the revision the page was read at, not a newer main", () => {
+    return withSite(({ wt, seed }) => {
+      const base = git(wt, "rev-parse", "origin/main");
+      writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-02", "Edited meanwhile."));
+      git(seed, "commit", "--quiet", "-am", "edit during rewrite");
+      git(seed, "push", "--quiet", "origin", "main");
+      fetchSite(wt);
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", base);
+      assert.equal(git(wt, "rev-parse", `${r.commit}^`), base);
     });
   });
 
@@ -98,7 +110,7 @@ describe("commitPage", () => {
       const hook = join(wt, "..", "hooks", "pre-commit");
       writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`);
       chmodSync(hook, 0o755);
-      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       assert.ok(existsSync(marker));
     });
   });
@@ -108,7 +120,7 @@ describe("commitPage", () => {
       const hook = join(wt, "..", "hooks", "pre-commit");
       writeFileSync(hook, "#!/bin/sh\nexit 1\n");
       chmodSync(hook, 0o755);
-      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"));
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main"));
       assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
       assert.equal(git(wt, "status", "--porcelain"), "");
     });
@@ -116,16 +128,16 @@ describe("commitPage", () => {
 
   test("refuses when the branch already exists", () => {
     return withSite(({ wt }) => {
-      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       git(wt, "switch", "--quiet", "--detach", "origin/main");
-      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"));
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main"));
     });
   });
 
   test("refuses while another running process holds the worktree lock", () => {
     return withSite(({ wt }) => {
       writeFileSync(join(wt, ".git", "rewrite-queue.lock"), String(process.pid));
-      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"), /busy/);
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main"), /busy/);
       assert.equal(git(wt, "branch", "--list", "rewrite/*"), "");
     });
   });
@@ -134,7 +146,7 @@ describe("commitPage", () => {
     return withSite(({ wt }) => {
       const lock = join(wt, ".git", "rewrite-queue.lock");
       writeFileSync(lock, "999999");
-      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       assert.equal(existsSync(lock), false);
     });
   });
@@ -143,7 +155,7 @@ describe("commitPage", () => {
     return withSite(({ wt, root, origin }) => {
       const linked = join(root, "linked");
       git(wt, "worktree", "add", "--quiet", "--detach", linked, "origin/main");
-      const r = commitPage(linked, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      const r = commitPage(linked, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       assert.equal(git(linked, "rev-parse", `${r.commit}^`), git(linked, "rev-parse", "origin/main"));
       assert.equal(git(origin, "branch", "--list", "rewrite/*"), "");
     });
@@ -152,13 +164,13 @@ describe("commitPage", () => {
   test("refuses a dirty worktree", () => {
     return withSite(({ wt }) => {
       writeFileSync(join(wt, "stray.txt"), "left behind\n");
-      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg"), /not clean/);
+      assert.throws(() => commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main"), /not clean/);
     });
   });
 
   test("refuses a page that is not on origin/main", () => {
     return withSite(({ wt }) => {
-      assert.throws(() => commitPage(wt, "no-such-page", page("2026-11-03"), "2026-11-03", "msg"));
+      assert.throws(() => commitPage(wt, "no-such-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main"));
     });
   });
 });
@@ -166,7 +178,7 @@ describe("commitPage", () => {
 describe("resolveJob", () => {
   test("open while the branch exists and is not merged", () => {
     return withSite(({ wt }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       fetchSite(wt);
       assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "open");
     });
@@ -174,7 +186,7 @@ describe("resolveJob", () => {
 
   test("published once the commit is merged into origin/main", () => {
     return withSite(({ wt, seed }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       git(wt, "push", "--quiet", "origin", r.branch);
       git(seed, "fetch", "--quiet", "origin");
       git(seed, "merge", "--quiet", "--no-ff", "-m", "merge", `origin/${r.branch}`);
@@ -186,7 +198,7 @@ describe("resolveJob", () => {
 
   test("published when a squash merge left the page identical", () => {
     return withSite(({ wt, seed }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03", "Squashed."), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03", "Squashed."), "2026-11-03", "msg", "origin/main");
       writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-03", "Squashed."));
       git(seed, "commit", "--quiet", "-am", "squash");
       git(seed, "push", "--quiet", "origin", "main");
@@ -197,7 +209,7 @@ describe("resolveJob", () => {
 
   test("published when review edits on the branch were squash-merged", () => {
     return withSite(({ wt, seed }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg", "origin/main");
       git(wt, "switch", "--quiet", r.branch);
       writeFileSync(join(wt, "src/content/answers/old-page.md"), page("2026-11-03", "Corrected in review."));
       git(wt, "commit", "--quiet", "-am", "review fix");
@@ -212,7 +224,7 @@ describe("resolveJob", () => {
 
   test("superseded when main's page changed in a way the job cannot explain", () => {
     return withSite(({ wt, seed }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03", "Draft."), "2026-11-03", "msg", "origin/main");
       writeFileSync(join(seed, "src/content/answers/old-page.md"), page("2026-11-04", "Edited in the forge."));
       git(seed, "commit", "--quiet", "-am", "squash with web edits");
       git(seed, "push", "--quiet", "origin", "main");
@@ -225,7 +237,7 @@ describe("resolveJob", () => {
 
   test("rejected when the branch was deleted without merging", () => {
     return withSite(({ wt }) => {
-      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg");
+      const r = commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
       git(wt, "switch", "--quiet", "--detach", "origin/main");
       git(wt, "branch", "--quiet", "-D", r.branch);
       fetchSite(wt);

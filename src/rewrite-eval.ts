@@ -24,7 +24,7 @@ import { pathToFileURL } from "url";
 
 import { rewritePage, setFrontmatterDate, splitFrontmatter, type RewriteOptions, type RewriteResult } from "./rewriter.js";
 import { checkClaims, extractClaimTokens } from "./claim-check.js";
-import { listAnswerPages, readMainPage } from "./site-worktree.js";
+import { listAnswerPages, readPageAt } from "./site-worktree.js";
 
 // Stale facts with known-correct handling: each must survive a rewrite verbatim in
 // its tokens. None claims to be current, so keeping them is always the right call.
@@ -131,7 +131,9 @@ export function summarize(pair: string, scores: PageScore[]): PairSummary {
   const plantedTotal = scores.reduce((n, s) => n + s.plantedTotal, 0);
   return {
     pair,
-    verdict: scores.length === 0 ? "UNKNOWN" : "MEASURED",
+    // Error entries are not measurements: a pair whose every rewrite failed (say, a
+    // misspelled model) measured nothing and must not read as a result.
+    verdict: ok.length === 0 ? "UNKNOWN" : "MEASURED",
     pagesExamined: scores.length,
     pagesWithAddedTokens: scores.filter((s) => s.added.length > 0).length,
     plantedKeptRate: plantedTotal > 0 ? scores.reduce((n, s) => n + s.plantedKept, 0) / plantedTotal : 0,
@@ -162,7 +164,7 @@ export async function runEval(opts: EvalOptions): Promise<{ summaries: PairSumma
     const label = `${pair.draftModel} + ${pair.voiceModel}`;
     const scores: PageScore[] = [];
     for (const page of pages) {
-      const { frontmatter, body } = splitFrontmatter(readMainPage(opts.siteDir, page.path));
+      const { frontmatter, body } = splitFrontmatter(readPageAt(opts.siteDir, "origin/main", page.path));
       const planted = plantFacts(body, page.slug);
       const input = frontmatter + planted.body;
       const start = Date.now();
