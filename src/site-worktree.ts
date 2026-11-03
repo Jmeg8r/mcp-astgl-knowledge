@@ -34,13 +34,39 @@ export interface SiteCommit {
 
 export type JobResolution = "open" | "published" | "rejected" | "superseded";
 
+// Variables git exports to hooks that bind a git command to one repository, overriding
+// `cwd`. Run under a hook (as the test suite is by pre-push), they made fixture
+// commands act on the real repository: a commit deleting every file, and its config
+// rewritten (incident 2026-11-03). Every git call here drops them so `dir` decides.
+const REPO_LOCATION_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_PREFIX",
+  "GIT_NAMESPACE",
+];
+
+export function gitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of REPO_LOCATION_VARS) delete env[name];
+  return env;
+}
+
 function git(dir: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", args, {
+    cwd: dir,
+    env: gitEnv(),
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function gitSucceeds(dir: string, ...args: string[]): boolean {
   try {
-    execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+    execFileSync("git", args, { cwd: dir, env: gitEnv(), stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -79,7 +105,7 @@ export function mainRevision(dir: string): string {
 }
 
 export function readPageAt(dir: string, revision: string, relPath: string): string {
-  return execFileSync("git", ["show", `${revision}:${relPath}`], { cwd: dir, encoding: "utf-8" });
+  return execFileSync("git", ["show", `${revision}:${relPath}`], { cwd: dir, env: gitEnv(), encoding: "utf-8" });
 }
 
 // WHAT: Pages whose date is older than the threshold, oldest first, minus blocked URLs.
@@ -180,6 +206,7 @@ function commitPageUnlocked(
     git(dir, "add", "--", relPath);
     execFileSync("git", ["commit", "--quiet", "--file", "-"], {
       cwd: dir,
+      env: gitEnv(),
       input: message,
       stdio: ["pipe", "ignore", "pipe"],
     });

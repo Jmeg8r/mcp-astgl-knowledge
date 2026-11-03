@@ -13,7 +13,8 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 import {
@@ -159,6 +160,28 @@ describe("commitPage", () => {
       assert.equal(git(linked, "rev-parse", `${r.commit}^`), git(linked, "rev-parse", "origin/main"));
       assert.equal(git(origin, "branch", "--list", "rewrite/*"), "");
     });
+  });
+
+  test("a GIT_DIR inherited from a git hook never reaches another repository", async () => {
+    const decoy = mkdtempSync(join(tmpdir(), "decoy-repo-"));
+    const saved = process.env.GIT_DIR;
+    try {
+      git(decoy, "init", "--quiet", "--initial-branch=main");
+      git(decoy, "-c", "user.name=Decoy", "-c", "user.email=decoy@example.com", "commit", "--quiet", "--allow-empty", "-m", "decoy");
+      const headBefore = git(decoy, "rev-parse", "HEAD");
+      const configBefore = git(decoy, "config", "--local", "--list");
+      process.env.GIT_DIR = join(decoy, ".git");
+      await withSite(({ wt }) => {
+        commitPage(wt, "old-page", page("2026-11-03"), "2026-11-03", "msg", "origin/main");
+      });
+      delete process.env.GIT_DIR;
+      assert.equal(git(decoy, "rev-parse", "HEAD"), headBefore);
+      assert.equal(git(decoy, "config", "--local", "--list"), configBefore);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+      rmSync(decoy, { recursive: true, force: true });
+    }
   });
 
   test("refuses a dirty worktree", () => {

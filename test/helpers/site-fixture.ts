@@ -15,6 +15,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
+import { gitEnv } from "../../src/site-worktree.js";
+
 export interface SiteFixture {
   root: string;
   origin: string;
@@ -23,8 +25,10 @@ export interface SiteFixture {
   hooks: string;
 }
 
+// gitEnv(): the suite runs inside git's pre-push hook, whose GIT_DIR would otherwise
+// point these commands at the real repository instead of the fixture (2026-11-03).
 export function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
+  return execFileSync("git", args, { cwd, env: gitEnv(), encoding: "utf-8" }).trim();
 }
 
 export function page(date: string, body = "Body text."): string {
