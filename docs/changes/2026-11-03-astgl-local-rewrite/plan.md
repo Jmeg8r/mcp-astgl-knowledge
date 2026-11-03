@@ -109,3 +109,14 @@ shows nothing new, exit 0).
 - **Rewrite FAQ frontmatter now**: deferred in F4 (build risk).
 - **Reuse `rejected` for the backlog**: rejected in intent Q2 (cooldown side effect).
 - **Widen the daemon token to ASTGL**: rejected (all ASTGL secrets to every task).
+
+## Deviations
+
+- **Step 1, claim lock (2026-11-03).** The spec's partial unique index on open jobs
+  was replaced by a check-then-insert inside one `BEGIN IMMEDIATE` transaction
+  (`claimJob()`). The live table already holds up to four `pending_approval` rows per
+  article, so a unique index over open statuses would fail to create on production
+  until the backlog is cleared. The transaction serializes writers the same way and
+  keeps the migration independent of the backlog cleanup. Verified on a copy of the
+  live database: integrity `ok`, 177 rows before and after, legacy-column hash
+  identical, migration run twice.

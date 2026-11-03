@@ -168,17 +168,36 @@ export function runMigrations(database: InstanceType<typeof Database>): void {
   database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status)");
   database.exec("CREATE INDEX IF NOT EXISTS idx_ideas_source ON ideas(source)");
 
-  // WHAT: Track auto-rewrite jobs for stale articles (one row per attempt)
-  // WHY: Drives the daily rewrite-queue cron + the Telegram approval gate.
-  //      cooldown_until lets a rejected article sit for N days before re-queue.
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS rewrite_jobs (
+  migrateRewriteJobs(database);
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_status ON rewrite_jobs(status)"
+  );
+  database.exec(
+    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_article ON rewrite_jobs(article_url)"
+  );
+}
+
+// WHAT: Track auto-rewrite jobs for stale answer pages (one row per attempt).
+// WHY:  Drives the weekly rewrite-queue and its claim lock. cooldown_until lets a
+//       rejected article sit for N days before re-queue; site_branch/site_commit
+//       record the local astgl-site commit James reviews (2026-11-03-astgl-local-rewrite).
+const REWRITE_JOB_STATUSES =
+  "'drafting','pending_approval','approved','published','rejected','failed','superseded'";
+
+// The columns the pre-2026-11-03 table had, in order. The rebuild copies exactly
+// these; the two site columns start NULL for legacy rows.
+const LEGACY_REWRITE_JOB_COLUMNS =
+  "id, article_url, created_at, status, draft_path, telegram_chat_id, " +
+  "telegram_thread_id, telegram_message_id, approved_at, published_at, " +
+  "substack_url, cooldown_until, error";
+
+function rewriteJobsDdl(table: string): string {
+  return `
+    CREATE TABLE ${table} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       article_url TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      status TEXT NOT NULL CHECK (status IN (
-        'pending_approval','approved','published','rejected','failed'
-      )),
+      status TEXT NOT NULL CHECK (status IN (${REWRITE_JOB_STATUSES})),
       draft_path TEXT,
       telegram_chat_id TEXT,
       telegram_thread_id INTEGER,
@@ -187,15 +206,36 @@ export function runMigrations(database: InstanceType<typeof Database>): void {
       published_at TEXT,
       substack_url TEXT,
       cooldown_until TEXT,
-      error TEXT
+      error TEXT,
+      site_branch TEXT,
+      site_commit TEXT
     )
-  `);
-  database.exec(
-    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_status ON rewrite_jobs(status)"
-  );
-  database.exec(
-    "CREATE INDEX IF NOT EXISTS idx_rewrite_jobs_article ON rewrite_jobs(article_url)"
-  );
+  `;
+}
+
+// WHAT: Create rewrite_jobs, or rebuild a legacy one in place with every row kept.
+// WHY:  SQLite cannot alter a CHECK constraint, so adding statuses means copying
+//       into a new table inside one transaction (spec F3). 'superseded' in the
+//       stored DDL marks a rebuilt table, so the rebuild runs at most once.
+function migrateRewriteJobs(database: InstanceType<typeof Database>): void {
+  const existing = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rewrite_jobs'")
+    .pluck()
+    .get() as string | undefined;
+
+  if (existing === undefined) {
+    database.exec(rewriteJobsDdl("rewrite_jobs"));
+  } else if (!existing.includes("'superseded'")) {
+    database.transaction(() => {
+      database.exec(rewriteJobsDdl("rewrite_jobs_rebuild"));
+      database.exec(
+        `INSERT INTO rewrite_jobs_rebuild (${LEGACY_REWRITE_JOB_COLUMNS})
+         SELECT ${LEGACY_REWRITE_JOB_COLUMNS} FROM rewrite_jobs`
+      );
+      database.exec("DROP TABLE rewrite_jobs");
+      database.exec("ALTER TABLE rewrite_jobs_rebuild RENAME TO rewrite_jobs");
+    })();
+  }
 }
 
 // --- Ecosystem Snapshots ---
