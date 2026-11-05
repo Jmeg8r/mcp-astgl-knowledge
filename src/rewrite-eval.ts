@@ -162,20 +162,20 @@ export async function runEval(opts: EvalOptions): Promise<{ summaries: PairSumma
 
   for (const pair of opts.pairs) {
     const label = `${pair.draftModel} + ${pair.voiceModel}`;
+    // Created before the first rewrite, so an unusable --out fails before any model time.
+    const outDir = opts.outDir ? join(opts.outDir, label.replace(/[^A-Za-z0-9.+-]+/g, "_")) : null;
+    if (outDir) mkdirSync(outDir, { recursive: true });
     const scores: PageScore[] = [];
     for (const page of pages) {
       const { frontmatter, body } = splitFrontmatter(readPageAt(opts.siteDir, "origin/main", page.path));
       const planted = plantFacts(body, page.slug);
       const input = frontmatter + planted.body;
       const start = Date.now();
+      let output: string | null = null;
       try {
         const result = await opts.rewrite(input, { ...pair, date });
         scores.push({ ...scorePage(input, planted.facts, result.page, date, Date.now() - start), slug: page.slug });
-        if (opts.outDir) {
-          const dir = join(opts.outDir, label.replace(/[^A-Za-z0-9.+-]+/g, "_"));
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(join(dir, `${page.slug}.md`), result.page);
-        }
+        output = result.page;
       } catch (err) {
         scores.push({
           slug: page.slug,
@@ -189,6 +189,9 @@ export async function runEval(opts: EvalOptions): Promise<{ summaries: PairSumma
         });
       }
       console.error(`  ${label} ${page.slug}: ${scores[scores.length - 1].error ?? "scored"}`);
+      // Outside the try: a failed write is not a model error. Caught there, it recorded
+      // an already-scored page a second time and the run still read MEASURED (2026-11-05).
+      if (outDir && output !== null) writeFileSync(join(outDir, `${page.slug}.md`), output);
     }
     byPair[label] = scores;
     summaries.push(summarize(label, scores));
