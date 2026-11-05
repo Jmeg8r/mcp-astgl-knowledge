@@ -12,6 +12,8 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, readdirSync, writeFileSync } from "fs";
+import { join } from "path";
 
 import { factKept, plantFacts, runEval, scorePage, summarize, type PageScore } from "../src/rewrite-eval.js";
 import type { RewriteResult } from "../src/rewriter.js";
@@ -113,6 +115,59 @@ describe("runEval", () => {
           ["d1 + v1", 3, 1, 0],
           ["d1 + v2", 3, 1, 0],
         ]
+      );
+    }));
+
+  // A stub rewriter that only moves the date, counting its calls.
+  function countingRewrite() {
+    const calls = { n: 0 };
+    const rewrite = async (original: string): Promise<RewriteResult> => {
+      calls.n += 1;
+      return {
+        page: original.replace(/date: '[^']*'/, "date: '2026-11-03'"),
+        originalBody: "",
+        draftChars: 1,
+        voiceChars: 1,
+        draftMs: 1,
+        voiceMs: 1,
+      };
+    };
+    return { calls, rewrite };
+  }
+  const ONE_PAIR = [{ draftModel: "d1", voiceModel: "v1" }];
+  // runEval names each pair's output directory after its label, "d1 + v1".
+  const PAIR_DIR = "d1_+_v1";
+
+  test("--out writes one file per page and counts each page once", () =>
+    withSite(async ({ root, wt }) => {
+      const { rewrite } = countingRewrite();
+      const outDir = join(root, "out");
+      const report = await runEval({ siteDir: wt, now: NOW, pairs: ONE_PAIR, limit: null, rewrite, outDir });
+      assert.deepEqual(readdirSync(join(outDir, PAIR_DIR)).sort(), ["fresh-page.md", "old-page.md", "older-page.md"]);
+      assert.equal(report.summaries[0].pagesExamined, 3);
+      assert.equal(report.summaries[0].errors, 0);
+    }));
+
+  test("an --out path that cannot be created fails before any rewrite", () =>
+    withSite(async ({ root, wt }) => {
+      const { calls, rewrite } = countingRewrite();
+      const blocker = join(root, "blocker");
+      writeFileSync(blocker, "a file, not a directory");
+      await assert.rejects(
+        runEval({ siteDir: wt, now: NOW, pairs: ONE_PAIR, limit: null, rewrite, outDir: join(blocker, "out") })
+      );
+      assert.equal(calls.n, 0);
+    }));
+
+  test("a failed output write fails the run instead of scoring the page twice", () =>
+    withSite(async ({ root, wt }) => {
+      const { rewrite } = countingRewrite();
+      const outDir = join(root, "out");
+      // A directory where the page's output file should go makes that one write fail.
+      mkdirSync(join(outDir, PAIR_DIR, "old-page.md"), { recursive: true });
+      await assert.rejects(
+        runEval({ siteDir: wt, now: NOW, pairs: ONE_PAIR, limit: null, rewrite, outDir }),
+        /EISDIR/
       );
     }));
 });
