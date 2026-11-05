@@ -45,3 +45,5 @@ dist-mcpb/
 .lefthook-local.yml
 .cr-cache/
 *.cr-review.md
+# The rewrite queue's astgl-site worktree (James creates it; see docs/changes/2026-11-03-astgl-local-rewrite)
+/.rewrite-site/

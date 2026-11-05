@@ -218,7 +218,7 @@ npm install
 | `npm run related` | Generate internal article links via vector similarity |
 | `npm run build-public-db` | Write `build/knowledge-public.db` with non-public rows removed (runs in `prepack`) |
 
-Other maintainer scripts (draft ingest and reconcile, rewrite queue, wiki sync, backup pruning, dashboard data, MCPB bundle) are listed in `package.json`.
+Other maintainer scripts (draft ingest and reconcile, the local answer-page rewrite queue with its backlog and evaluation tools, wiki sync, backup pruning, dashboard data, MCPB bundle) are listed in `package.json`.
 
 ### Environment Variables
 
