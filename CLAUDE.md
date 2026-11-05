@@ -145,7 +145,8 @@ spam real humans on Telegram/Discord/Substack. Read this whole file before your 
 9. **The Secret Shortcut.** → Secret-bearing scripts run via `pass-cli run --env-file .env
    -- …` (see package.json). Never print env values, never commit `.env`; new secrets get a
    placeholder in `.env.example` and go into pass. `.env` values may be referenced, never
-   displayed.
+   displayed. `rewrite-eval` needs settings but no secrets, so it loads `.env` with
+   `node --env-file=.env` instead of `pass-cli`; a missing `.env` still fails it.
 10. **The Blanket Commit.** → Stage files by name; if the diff shows `data/` changes you
     did not intend, stop and ask. **NEVER commit `data/knowledge.db`: this repository is
     PUBLIC and the working copy holds rows the publication gate exists to withhold.** The
