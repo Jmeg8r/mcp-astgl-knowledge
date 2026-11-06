@@ -132,12 +132,17 @@ function cleanModelOutput(text: string, pass: string): string {
 async function ollamaGenerate(
   baseUrl: string,
   model: string,
-  prompt: string
+  prompt: string,
+  pass: string
 ): Promise<{ text: string; ms: number }> {
+  // think: false — a thinking model's hidden reasoning counts against NUM_PREDICT.
+  // qwen3.6:35b-a3b spent the budget thinking and returned pages cut off mid-sentence
+  // or empty in the 2026-11-06 evaluation. Ollama ignores it for other models.
   const requestBody = JSON.stringify({
     model,
     prompt,
     stream: false,
+    think: false,
     options: { num_ctx: NUM_CTX, num_predict: NUM_PREDICT, temperature: 0.5 },
   });
 
@@ -173,8 +178,14 @@ async function ollamaGenerate(
     const errBody = await resp.text();
     throw new Error(`ollama ${model} failed: ${resp.status} ${errBody.slice(0, 500)}`);
   }
-  const data = (await resp.json()) as { response?: string; error?: string };
+  const data = (await resp.json()) as { response?: string; error?: string; done_reason?: string };
   if (data.error) throw new Error(`ollama ${model} error: ${data.error}`);
+  // A cut-off page passes the claim check, which only catches added tokens.
+  if (data.done_reason === "length") {
+    throw new Error(
+      `${pass} pass: ollama ${model} stopped at the output budget (${NUM_PREDICT} tokens), so the page is truncated`
+    );
+  }
   return { text: data.response ?? "", ms };
 }
 
@@ -221,10 +232,10 @@ export async function rewritePage(
   const { frontmatter, body } = splitFrontmatter(page);
   const newFrontmatter = setFrontmatterDate(frontmatter, opts.date);
 
-  const draft = await ollamaGenerate(baseUrl, opts.draftModel, draftPrompt(body));
+  const draft = await ollamaGenerate(baseUrl, opts.draftModel, draftPrompt(body), "draft");
   const draftText = cleanModelOutput(draft.text, "draft");
   const voiceProfile = await deps.loadVoiceProfile();
-  const voiced = await ollamaGenerate(baseUrl, opts.voiceModel, voicePrompt(voiceProfile, draftText));
+  const voiced = await ollamaGenerate(baseUrl, opts.voiceModel, voicePrompt(voiceProfile, draftText), "voice");
   const voicedText = cleanModelOutput(voiced.text, "voice");
 
   return {
