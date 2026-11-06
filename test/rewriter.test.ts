@@ -36,11 +36,15 @@ interface Call {
   model: string;
   prompt: string;
   numCtx: number | undefined;
+  think: unknown;
 }
+
+// A stubbed reply: the response text, or the text plus Ollama's `done_reason`.
+type StubReply = string | { response: string; done_reason: string };
 
 const realFetch = globalThis.fetch;
 let calls: Call[] = [];
-let responses: string[] = [];
+let responses: StubReply[] = [];
 
 function stubFetch(): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -53,9 +57,12 @@ function stubFetch(): void {
       model: string;
       prompt: string;
       options?: { num_ctx?: number };
+      think?: unknown;
     };
-    calls.push({ url, model: body.model, prompt: body.prompt, numCtx: body.options?.num_ctx });
-    return new Response(JSON.stringify({ response: responses.shift() ?? "" }), { status: 200 });
+    calls.push({ url, model: body.model, prompt: body.prompt, numCtx: body.options?.num_ctx, think: body.think });
+    const reply = responses.shift() ?? "";
+    const payload = typeof reply === "string" ? { response: reply, done_reason: "stop" } : reply;
+    return new Response(JSON.stringify(payload), { status: 200 });
   }) as typeof fetch;
 }
 
@@ -91,6 +98,8 @@ describe("rewritePage", () => {
     assert.ok(calls[1].prompt.includes("Draft body."));
     // A model's own small default context must never truncate the prompt.
     assert.ok(calls.every((c) => (c.numCtx ?? 0) >= 16384));
+    // A thinking model's hidden reasoning would spend the output budget (2026-11-06).
+    assert.ok(calls.every((c) => c.think === false));
 
     const expectedFrontmatter = FRONTMATTER.replace("date: '2026-04-09'", "date: '2026-11-03'");
     assert.equal(out.page, `${expectedFrontmatter}\n# What is an MCP server?\n\nVoiced body.\n`);
@@ -106,6 +115,17 @@ describe("rewritePage", () => {
   test("fails on an empty model response", async () => {
     responses = ["Draft body.", "   "];
     await assert.rejects(rewritePage(PAGE, opts, deps), /empty/);
+  });
+
+  test("fails when the draft pass stopped at the output budget", async () => {
+    responses = [{ response: "Draft cut off mid-", done_reason: "length" }, "Voiced body."];
+    await assert.rejects(rewritePage(PAGE, opts, deps), /draft-model.*output budget/);
+    assert.equal(calls.length, 1, "a truncated draft must not reach the voice pass");
+  });
+
+  test("fails when the voice pass stopped at the output budget", async () => {
+    responses = ["Draft body.", { response: "# Title\n\nVoiced but cut off mid-", done_reason: "length" }];
+    await assert.rejects(rewritePage(PAGE, opts, deps), /voice-model.*output budget/);
   });
 
   test("fails when the model emits its own frontmatter", async () => {
