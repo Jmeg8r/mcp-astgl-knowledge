@@ -11,7 +11,7 @@ linear: pending
 
 | File | Change |
 |---|---|
-| `src/site-worktree.ts` | One `requireWorktree(dir)` check before every git spawn: in `git()`, before the `try` in `gitSucceeds()`, in `readPageAt()`, and before the commit |
+| `src/site-worktree.ts` | One `requireWorktree(dir)` check before every git spawn: in `git()`, before the `try` in `gitSucceeds()`, and in `readPageAt()`. The commit's own spawn always follows `git(dir, "add", …)`, so it is covered |
 | `test/site-worktree.test.ts` | A `missing worktree` group; committed failing first |
 
 ## Order of work
