@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "child_process";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const MAIN_REF = "origin/main";
@@ -55,7 +55,21 @@ export function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+// WHAT: Throw unless the worktree directory exists.
+// WHY:  Spawning in a missing `cwd` fails as "spawnSync git ENOENT", which reads as git
+//       not being installed (18 failed keeps, 2026-11-05), and gitSucceeds would turn
+//       it into `false`, so resolveJob would report a live review as rejected.
+function requireWorktree(dir: string): void {
+  if (!existsSync(dir)) {
+    throw new Error(
+      `astgl-site worktree not found: ${dir} (set ASTGL_SITE_WORKTREE, or create it with ` +
+        "`git -C <astgl-site> worktree add --detach <path> origin/main`)"
+    );
+  }
+}
+
 function git(dir: string, ...args: string[]): string {
+  requireWorktree(dir);
   return execFileSync("git", args, {
     cwd: dir,
     env: gitEnv(),
@@ -65,6 +79,7 @@ function git(dir: string, ...args: string[]): string {
 }
 
 function gitSucceeds(dir: string, ...args: string[]): boolean {
+  requireWorktree(dir);
   try {
     execFileSync("git", args, { cwd: dir, env: gitEnv(), stdio: "ignore" });
     return true;
@@ -105,6 +120,7 @@ export function mainRevision(dir: string): string {
 }
 
 export function readPageAt(dir: string, revision: string, relPath: string): string {
+  requireWorktree(dir);
   return execFileSync("git", ["show", `${revision}:${relPath}`], { cwd: dir, env: gitEnv(), encoding: "utf-8" });
 }
 

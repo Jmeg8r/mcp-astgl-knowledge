@@ -21,6 +21,7 @@ import {
   commitPage,
   fetchSite,
   listAnswerPages,
+  readPageAt,
   resolveJob,
   staleCandidates,
   type AnswerPage,
@@ -267,4 +268,39 @@ describe("resolveJob", () => {
       assert.equal(resolveJob(wt, r.branch, r.commit, "src/content/answers/old-page.md"), "rejected");
     });
   });
+});
+
+// A missing worktree made git spawns fail as "spawnSync git ENOENT", which reads as
+// git not being installed (18 failed keeps, 2026-11-05), and made resolveJob report
+// "rejected" because every probe came back false.
+describe("missing worktree", () => {
+  function withMissingDir(fn: (dir: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "site-missing-"));
+    try {
+      fn(join(root, "absent"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const namesTheWorktree = (dir: string) => (err: unknown) =>
+    err instanceof Error &&
+    err.message.includes(`astgl-site worktree not found: ${dir}`) &&
+    err.message.includes("ASTGL_SITE_WORKTREE");
+
+  test("fetchSite names the missing directory", () =>
+    withMissingDir((dir) => assert.throws(() => fetchSite(dir), namesTheWorktree(dir))));
+
+  test("listAnswerPages and readPageAt name the missing directory", () =>
+    withMissingDir((dir) => {
+      assert.throws(() => listAnswerPages(dir), namesTheWorktree(dir));
+      assert.throws(() => readPageAt(dir, "origin/main", "src/content/answers/old-page.md"), namesTheWorktree(dir));
+    }));
+
+  test("resolveJob throws instead of reporting rejected", () =>
+    withMissingDir((dir) =>
+      assert.throws(
+        () => resolveJob(dir, "rewrite/old-page-2026-11-03", "0".repeat(40), "src/content/answers/old-page.md"),
+        namesTheWorktree(dir)
+      )));
 });
