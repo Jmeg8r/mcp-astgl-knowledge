@@ -15,7 +15,7 @@ On 2026-11-06, after the truncation fix (#77), James re-ran `rewrite-eval` for
 `qwen3-coder:30b + qwen3.6:35b-a3b` on all 20 answer pages. The summary read clean:
 100% of planted facts kept, length x1.00, 0 errors. The pages were not clean:
 
-- 13 pages lost every markdown table and 3 lost some. The rows became sentences
+- 12 pages lost every markdown table and 3 lost some. The rows became sentences
   ("Without MCP, you copy-paste... With MCP, AI pulls...").
 - Lists changed too: `how-mcp-registries-work` went from 55 list items to 8,
   `is-it-safe-to-run-ai-locally` from 45 to 12.
