@@ -7,7 +7,7 @@
  * Pass 2 — a local voice model rewrites the draft against the ASTGL voice profile.
  *
  * After each pass the output must keep the original's markdown structure: the same
- * count of headings, table rows, list items and code fences.
+ * count of headings, table rows, list items, code fences, images and blockquote lines.
  *
  * Both passes run on the local Ollama host only (2026-09-24 decision; spec R4). Only
  * the markdown body reaches a model: the frontmatter is copied byte-for-byte except
@@ -130,6 +130,8 @@ export interface MarkdownStructure {
   tableRows: number;
   listItems: number;
   codeFences: number;
+  images: number;
+  blockquoteLines: number;
 }
 
 const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
@@ -137,6 +139,8 @@ const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
   tableRows: "table rows",
   listItems: "list items",
   codeFences: "code fences",
+  images: "images",
+  blockquoteLines: "blockquote lines",
 };
 
 // A table's delimiter row, with or without outer pipes: `|---|:---:|` or `--- | ---`.
@@ -144,7 +148,8 @@ const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
 const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 
-// WHAT: Count the body's headings, table rows, list items and code fences. Lines
+// WHAT: Count the body's headings, table rows, list items, code fences, images and
+//       blockquote lines. Lines
 //       inside a fenced code block count only as part of the block, which closes only
 //       on a bare fence of the same character, at least as long. A table starts at
 //       a line with a pipe followed by a delimiter row, and runs while lines hold a pipe.
@@ -155,7 +160,14 @@ const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 //       else noticed. Every markdown form counts (pipeless tables, `1)` lists, setext
 //       headings): a form the guard misses can be lost without tripping it.
 export function markdownStructure(body: string): MarkdownStructure {
-  const counts: MarkdownStructure = { headings: 0, tableRows: 0, listItems: 0, codeFences: 0 };
+  const counts: MarkdownStructure = {
+    headings: 0,
+    tableRows: 0,
+    listItems: 0,
+    codeFences: 0,
+    images: 0,
+    blockquoteLines: 0,
+  };
   const lines = body.split("\n");
   let fence: string | null = null; // the opening fence while inside a code block
   let inTable = false;
@@ -179,6 +191,9 @@ export function markdownStructure(body: string): MarkdownStructure {
       inTable = false;
       continue;
     }
+    // Ten answer pages carry diagrams; a dropped one loses no claim token.
+    counts.images += (line.match(/!\[[^\]]*\]\(/g) ?? []).length;
+    if (/^\s*>/.test(line)) counts.blockquoteLines += 1;
     if (inTable && line.includes("|")) {
       counts.tableRows += 1;
       continue;

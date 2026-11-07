@@ -239,9 +239,9 @@ describe("markdownStructure", () => {
   });
 
   test("counts images and blockquote lines", () => {
-    const body = "![A diagram](/images/a.png) and ![B](/b.png)\n\n> Quoted.\n> Still quoted.\n";
+    const body = "![A diagram](/images/a.png) and ![B](/b.png)\n\n> Quoted.\n> Still quoted.\n\n| Icon | Name |\n|---|---|\n| ![i](/i.png) | x |\n";
     const got = markdownStructure(body);
-    assert.equal(got.images, 2);
+    assert.equal(got.images, 3);
     assert.equal(got.blockquoteLines, 2);
   });
 
