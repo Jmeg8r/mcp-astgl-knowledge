@@ -55,3 +55,15 @@ the named error.
   never fire on a real run.
 - **Allow a tolerance on the counts.** No data yet on what a harmless change looks
   like; exact counts fail closed.
+
+## Deviations
+
+- **More markdown forms are counted.** Codex review found three forms the first
+  version missed, each one a way to lose structure without tripping the guard:
+  tables without outer pipes, ordered lists numbered `1)`, and a closing code fence
+  that does not match its opener. Each got a failing test first, then the fix.
+  Setext headings were added with the `1)` lists, since they have the same gap.
+- **Images and blockquote lines are counted too.** Ten answer pages carry diagrams
+  and five carry blockquotes; a dropped diagram loses no claim token.
+- The 2026-11-06 eval outputs still split the same way after every change: the 15
+  pages that lost tables are refused and the 5 that kept them pass.
