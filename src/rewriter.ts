@@ -139,25 +139,42 @@ const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
   codeFences: "code fences",
 };
 
+// A table's delimiter row, with or without outer pipes: `|---|:---:|` or `--- | ---`.
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
 // WHAT: Count the body's headings, table rows, list items and code fences. Lines
-//       inside a fenced code block count only as part of the block.
+//       inside a fenced code block count only as part of the block. A table starts at
+//       a line with a pipe followed by a delimiter row, and runs while lines hold a pipe.
 // WHY:  The claim check catches added tokens, not lost structure. In the 2026-11-06
 //       evaluation the voice pass turned the tables on 15 of 20 pages into prose and
 //       collapsed lists (55 items to 8 on one page); every fact survived, so nothing
-//       else noticed.
+//       else noticed. Tables are found by the delimiter row because outer pipes are
+//       optional in markdown, and a table without them would otherwise count as zero.
 export function markdownStructure(body: string): MarkdownStructure {
   const counts: MarkdownStructure = { headings: 0, tableRows: 0, listItems: 0, codeFences: 0 };
+  const lines = body.split("\n");
   let inFence = false;
-  for (const line of body.split("\n")) {
+  let inTable = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (/^\s*(```|~~~)/.test(line)) {
       counts.codeFences += 1;
       inFence = !inFence;
-    } else if (inFence) {
+      inTable = false;
       continue;
+    }
+    if (inFence) continue;
+    if (inTable && line.includes("|")) {
+      counts.tableRows += 1;
+      continue;
+    }
+    inTable = false;
+    const next = lines[i + 1] ?? "";
+    if (line.includes("|") && next.includes("|") && TABLE_DELIMITER.test(next)) {
+      counts.tableRows += 1;
+      inTable = true;
     } else if (/^#{1,6}\s/.test(line)) {
       counts.headings += 1;
-    } else if (/^\s*\|/.test(line)) {
-      counts.tableRows += 1;
     } else if (/^\s*([-*+]|\d+\.)\s/.test(line)) {
       counts.listItems += 1;
     }
