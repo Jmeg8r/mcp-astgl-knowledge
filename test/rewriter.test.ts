@@ -143,6 +143,12 @@ describe("rewritePage", () => {
     await assert.rejects(rewritePage(tablePage, opts, deps), /draft pass changed the page structure.*table rows 3 -> 0/);
   });
 
+  test("fails when a list numbered with ) becomes prose", async () => {
+    const listPage = `${FRONTMATTER}\n# Steps\n\n1) Install the server.\n2) Start the client.\n`;
+    responses = ["# Steps\n\nInstall the server, then start the client.", "# Steps\n\nVoiced."];
+    await assert.rejects(rewritePage(listPage, opts, deps), /draft pass changed the page structure.*list items 2 -> 0/);
+  });
+
   test("fails when the voice pass collapses a list", async () => {
     const listPage = `${FRONTMATTER}\n# Steps\n\n- one\n- two\n- three\n`;
     responses = ["# Steps\n\n- one\n- two\n- three", "# Steps\n\nOne, two and three."];
@@ -203,6 +209,15 @@ describe("markdownStructure", () => {
 
   test("a line with a pipe outside a table is not a table row", () => {
     assert.equal(markdownStructure("Run `a | b` to pipe.\n\nThen this | that.\n").tableRows, 0);
+  });
+
+  test("counts ordered list items with either delimiter", () => {
+    assert.equal(markdownStructure("1. one\n2) two\n3) three\n").listItems, 3);
+  });
+
+  test("counts a setext heading, and a rule after a blank line is not one", () => {
+    const body = "Title\n=====\n\nPart\n----\n\nText.\n\n---\n\nMore.\n";
+    assert.equal(markdownStructure(body).headings, 2);
   });
 
   test("ignores lines inside a fenced code block", () => {
