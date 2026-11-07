@@ -142,9 +142,11 @@ const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
 // A table's delimiter row, with or without outer pipes: `|---|:---:|` or `--- | ---`.
 const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 
 // WHAT: Count the body's headings, table rows, list items and code fences. Lines
-//       inside a fenced code block count only as part of the block. A table starts at
+//       inside a fenced code block count only as part of the block, which closes only
+//       on a bare fence of the same character, at least as long. A table starts at
 //       a line with a pipe followed by a delimiter row, and runs while lines hold a pipe.
 //       A `===` or `---` line straight after a paragraph line is a setext heading.
 // WHY:  The claim check catches added tokens, not lost structure. In the 2026-11-06
@@ -155,20 +157,28 @@ const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
 export function markdownStructure(body: string): MarkdownStructure {
   const counts: MarkdownStructure = { headings: 0, tableRows: 0, listItems: 0, codeFences: 0 };
   const lines = body.split("\n");
-  let inFence = false;
+  let fence: string | null = null; // the opening fence while inside a code block
   let inTable = false;
   let afterParagraphLine = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const paragraphLine = afterParagraphLine;
     afterParagraphLine = false;
-    if (/^\s*(```|~~~)/.test(line)) {
+    if (fence !== null) {
+      const closer = line.trim();
+      if (/^(`+|~+)$/.test(closer) && closer[0] === fence[0] && closer.length >= fence.length) {
+        counts.codeFences += 1;
+        fence = null;
+      }
+      continue;
+    }
+    const opener = line.match(FENCE_OPEN);
+    if (opener) {
       counts.codeFences += 1;
-      inFence = !inFence;
+      fence = opener[1];
       inTable = false;
       continue;
     }
-    if (inFence) continue;
     if (inTable && line.includes("|")) {
       counts.tableRows += 1;
       continue;
