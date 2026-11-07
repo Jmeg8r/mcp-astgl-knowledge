@@ -155,6 +155,12 @@ describe("rewritePage", () => {
     await assert.rejects(rewritePage(codePage, opts, deps), /draft pass changed the page structure.*code fences 2 -> 1/);
   });
 
+  test("fails when a pass drops a diagram", async () => {
+    const imagePage = `${FRONTMATTER}\n# Flow\n\n![The flow](/images/flow.png)\n\nText.\n`;
+    responses = ["# Flow\n\nText.", "# Flow\n\nVoiced."];
+    await assert.rejects(rewritePage(imagePage, opts, deps), /draft pass changed the page structure.*images 1 -> 0/);
+  });
+
   test("fails when the voice pass collapses a list", async () => {
     const listPage = `${FRONTMATTER}\n# Steps\n\n- one\n- two\n- three\n`;
     responses = ["# Steps\n\n- one\n- two\n- three", "# Steps\n\nOne, two and three."];
@@ -205,12 +211,12 @@ describe("rewritePage", () => {
 describe("markdownStructure", () => {
   test("counts headings, table rows, list items and code fences", () => {
     const body = "# Title\n\n## Part\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n* two\n  - nested\n1. first\n\n```bash\necho hi\n```\n";
-    assert.deepEqual(markdownStructure(body), { headings: 2, tableRows: 3, listItems: 4, codeFences: 2 });
+    assert.deepEqual(markdownStructure(body), { headings: 2, tableRows: 3, listItems: 4, codeFences: 2, images: 0, blockquoteLines: 0 });
   });
 
   test("counts a table written without outer pipes", () => {
     const body = "Without | With\n--- | :---:\ncopy | pull\nwait | push\n\nAfter the table.\n";
-    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 4, listItems: 0, codeFences: 0 });
+    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 4, listItems: 0, codeFences: 0, images: 0, blockquoteLines: 0 });
   });
 
   test("a line with a pipe outside a table is not a table row", () => {
@@ -229,12 +235,19 @@ describe("markdownStructure", () => {
   test("a fence closes only on the same character, at least as long", () => {
     // Inside a ``` block, ~~~ and a shorter `` are code lines, not closers.
     const body = "```\ncode\n~~~\n``\n````\n\n# After\n";
-    assert.deepEqual(markdownStructure(body), { headings: 1, tableRows: 0, listItems: 0, codeFences: 2 });
+    assert.deepEqual(markdownStructure(body), { headings: 1, tableRows: 0, listItems: 0, codeFences: 2, images: 0, blockquoteLines: 0 });
+  });
+
+  test("counts images and blockquote lines", () => {
+    const body = "![A diagram](/images/a.png) and ![B](/b.png)\n\n> Quoted.\n> Still quoted.\n";
+    const got = markdownStructure(body);
+    assert.equal(got.images, 2);
+    assert.equal(got.blockquoteLines, 2);
   });
 
   test("ignores lines inside a fenced code block", () => {
-    const body = "```bash\n# a comment, not a heading\n- not a list item\n| not | a row |\n```\n";
-    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 0, listItems: 0, codeFences: 2 });
+    const body = "```bash\n# a comment, not a heading\n- not a list item\n| not | a row |\n> not a quote ![x](y)\n```\n";
+    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 0, listItems: 0, codeFences: 2, images: 0, blockquoteLines: 0 });
   });
 });
 
