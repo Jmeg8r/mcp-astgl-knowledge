@@ -137,6 +137,12 @@ describe("rewritePage", () => {
     assert.equal(calls.length, 1, "a draft that lost its structure must not reach the voice pass");
   });
 
+  test("fails when a table without outer pipes becomes prose", async () => {
+    const tablePage = `${FRONTMATTER}\n# Compare\n\nWithout | With\n--- | ---\ncopy | pull\n`;
+    responses = ["# Compare\n\nWithout it you copy; with it, it pulls.", "# Compare\n\nVoiced."];
+    await assert.rejects(rewritePage(tablePage, opts, deps), /draft pass changed the page structure.*table rows 3 -> 0/);
+  });
+
   test("fails when the voice pass collapses a list", async () => {
     const listPage = `${FRONTMATTER}\n# Steps\n\n- one\n- two\n- three\n`;
     responses = ["# Steps\n\n- one\n- two\n- three", "# Steps\n\nOne, two and three."];
@@ -188,6 +194,15 @@ describe("markdownStructure", () => {
   test("counts headings, table rows, list items and code fences", () => {
     const body = "# Title\n\n## Part\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n* two\n  - nested\n1. first\n\n```bash\necho hi\n```\n";
     assert.deepEqual(markdownStructure(body), { headings: 2, tableRows: 3, listItems: 4, codeFences: 2 });
+  });
+
+  test("counts a table written without outer pipes", () => {
+    const body = "Without | With\n--- | :---:\ncopy | pull\nwait | push\n\nAfter the table.\n";
+    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 4, listItems: 0, codeFences: 0 });
+  });
+
+  test("a line with a pipe outside a table is not a table row", () => {
+    assert.equal(markdownStructure("Run `a | b` to pipe.\n\nThen this | that.\n").tableRows, 0);
   });
 
   test("ignores lines inside a fenced code block", () => {
