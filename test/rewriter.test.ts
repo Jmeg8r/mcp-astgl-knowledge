@@ -14,7 +14,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { rewritePage, setFrontmatterDate, splitFrontmatter } from "../src/rewriter.js";
+import { markdownStructure, rewritePage, setFrontmatterDate, splitFrontmatter } from "../src/rewriter.js";
 
 const FRONTMATTER = [
   "---",
@@ -30,6 +30,8 @@ const FRONTMATTER = [
   "",
 ].join("\n");
 const PAGE = `${FRONTMATTER}\n# What is an MCP server?\n\nOriginal body.\n`;
+// A draft that keeps PAGE's one heading, so the structure check passes.
+const DRAFT = "# What is an MCP server?\n\nDraft body.";
 
 interface Call {
   url: string;
@@ -82,7 +84,7 @@ describe("rewritePage", () => {
   });
 
   test("runs both passes on local Ollama and keeps the frontmatter except date", async () => {
-    responses = ["Draft body.", "# What is an MCP server?\n\nVoiced body."];
+    responses = [DRAFT, "# What is an MCP server?\n\nVoiced body."];
     const out = await rewritePage(PAGE, opts, deps);
 
     assert.deepEqual(
@@ -113,33 +115,78 @@ describe("rewritePage", () => {
   });
 
   test("fails on an empty model response", async () => {
-    responses = ["Draft body.", "   "];
+    responses = [DRAFT, "   "];
     await assert.rejects(rewritePage(PAGE, opts, deps), /empty/);
   });
 
   test("fails when the draft pass stopped at the output budget", async () => {
-    responses = [{ response: "Draft cut off mid-", done_reason: "length" }, "Voiced body."];
+    responses = [{ response: "Draft cut off mid-", done_reason: "length" }, "# Title\n\nVoiced body."];
     await assert.rejects(rewritePage(PAGE, opts, deps), /draft-model.*output budget/);
     assert.equal(calls.length, 1, "a truncated draft must not reach the voice pass");
   });
 
   test("fails when the voice pass stopped at the output budget", async () => {
-    responses = ["Draft body.", { response: "# Title\n\nVoiced but cut off mid-", done_reason: "length" }];
+    responses = [DRAFT, { response: "# Title\n\nVoiced but cut off mid-", done_reason: "length" }];
     await assert.rejects(rewritePage(PAGE, opts, deps), /voice-model.*output budget/);
   });
 
+  test("fails when the draft pass turns a table into prose", async () => {
+    const tablePage = `${FRONTMATTER}\n# Compare\n\n| Without | With |\n|---|---|\n| copy | pull |\n`;
+    responses = ["# Compare\n\nWithout it you copy; with it, it pulls.", "# Compare\n\nVoiced."];
+    await assert.rejects(rewritePage(tablePage, opts, deps), /draft pass changed the page structure.*table rows 3 -> 0/);
+    assert.equal(calls.length, 1, "a draft that lost its structure must not reach the voice pass");
+  });
+
+  test("fails when a table without outer pipes becomes prose", async () => {
+    const tablePage = `${FRONTMATTER}\n# Compare\n\nWithout | With\n--- | ---\ncopy | pull\n`;
+    responses = ["# Compare\n\nWithout it you copy; with it, it pulls.", "# Compare\n\nVoiced."];
+    await assert.rejects(rewritePage(tablePage, opts, deps), /draft pass changed the page structure.*table rows 3 -> 0/);
+  });
+
+  test("fails when a list numbered with ) becomes prose", async () => {
+    const listPage = `${FRONTMATTER}\n# Steps\n\n1) Install the server.\n2) Start the client.\n`;
+    responses = ["# Steps\n\nInstall the server, then start the client.", "# Steps\n\nVoiced."];
+    await assert.rejects(rewritePage(listPage, opts, deps), /draft pass changed the page structure.*list items 2 -> 0/);
+  });
+
+  test("fails when a pass swaps a closing fence for one that does not close", async () => {
+    const codePage = `${FRONTMATTER}\n# Run\n\n\`\`\`bash\necho hi\n\`\`\`\n\nDone.\n`;
+    responses = ["# Run\n\n```bash\necho hi\n~~~\n\nDone.", "# Run\n\nVoiced."];
+    await assert.rejects(rewritePage(codePage, opts, deps), /draft pass changed the page structure.*code fences 2 -> 1/);
+  });
+
+  test("fails when a pass drops a diagram", async () => {
+    const imagePage = `${FRONTMATTER}\n# Flow\n\n![The flow](/images/flow.png)\n\nText.\n`;
+    responses = ["# Flow\n\nText.", "# Flow\n\nVoiced."];
+    await assert.rejects(rewritePage(imagePage, opts, deps), /draft pass changed the page structure.*images 1 -> 0/);
+  });
+
+  test("fails when the voice pass collapses a list", async () => {
+    const listPage = `${FRONTMATTER}\n# Steps\n\n- one\n- two\n- three\n`;
+    responses = ["# Steps\n\n- one\n- two\n- three", "# Steps\n\nOne, two and three."];
+    await assert.rejects(rewritePage(listPage, opts, deps), /voice pass changed the page structure.*list items 3 -> 0/);
+  });
+
+  test("both prompts tell the model to keep tables, lists and code blocks", async () => {
+    responses = [DRAFT, "# What is an MCP server?\n\nVoiced body."];
+    await rewritePage(PAGE, opts, deps);
+    for (const c of calls) assert.match(c.prompt, /table, list and code block/);
+    // The profile's Substack-only rule against markdown tables must be overridden.
+    assert.match(calls[1].prompt, /rule against markdown tables does not apply/);
+  });
+
   test("fails when the model emits its own frontmatter", async () => {
-    responses = ["Draft body.", "---\ntitle: x\n---\nBody"];
+    responses = [DRAFT, "---\ntitle: x\n---\nBody"];
     await assert.rejects(rewritePage(PAGE, opts, deps), /malformed/);
   });
 
   test("fails when the model wraps its own frontmatter in a fence", async () => {
-    responses = ["Draft body.", "```yaml\n---\ntitle: Model title\n---\nBody\n```"];
+    responses = [DRAFT, "```yaml\n---\ntitle: Model title\n---\nBody\n```"];
     await assert.rejects(rewritePage(PAGE, opts, deps), /malformed/);
   });
 
   test("strips delimiters the model echoed around a good body", async () => {
-    responses = ["---\nDraft body.\n---", "<body>\n# Title\n\nBody.\n</body>"];
+    responses = ["---\n# Title\n\nDraft body.\n---", "<body>\n# Title\n\nBody.\n</body>"];
     const out = await rewritePage(PAGE, opts, deps);
     assert.ok(out.page.endsWith("\n# Title\n\nBody.\n"));
   });
@@ -148,16 +195,59 @@ describe("rewritePage", () => {
     const seen: RequestInit[] = [];
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       seen.push(init ?? {});
-      return new Response(JSON.stringify({ response: "Body." }), { status: 200 });
+      return new Response(JSON.stringify({ response: "# Title\n\nBody." }), { status: 200 });
     }) as typeof fetch;
     await rewritePage(PAGE, opts, deps);
     assert.ok(seen.length > 0 && seen.every((i) => i.redirect === "error"));
   });
 
   test("unwraps a response the model fenced as markdown", async () => {
-    responses = ["Draft body.", "```markdown\n# Title\n\nBody.\n```"];
+    responses = [DRAFT, "```markdown\n# Title\n\nBody.\n```"];
     const out = await rewritePage(PAGE, opts, deps);
     assert.ok(out.page.endsWith("\n# Title\n\nBody.\n"));
+  });
+});
+
+describe("markdownStructure", () => {
+  test("counts headings, table rows, list items and code fences", () => {
+    const body = "# Title\n\n## Part\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n* two\n  - nested\n1. first\n\n```bash\necho hi\n```\n";
+    assert.deepEqual(markdownStructure(body), { headings: 2, tableRows: 3, listItems: 4, codeFences: 2, images: 0, blockquoteLines: 0 });
+  });
+
+  test("counts a table written without outer pipes", () => {
+    const body = "Without | With\n--- | :---:\ncopy | pull\nwait | push\n\nAfter the table.\n";
+    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 4, listItems: 0, codeFences: 0, images: 0, blockquoteLines: 0 });
+  });
+
+  test("a line with a pipe outside a table is not a table row", () => {
+    assert.equal(markdownStructure("Run `a | b` to pipe.\n\nThen this | that.\n").tableRows, 0);
+  });
+
+  test("counts ordered list items with either delimiter", () => {
+    assert.equal(markdownStructure("1. one\n2) two\n3) three\n").listItems, 3);
+  });
+
+  test("counts a setext heading, and a rule after a blank line is not one", () => {
+    const body = "Title\n=====\n\nPart\n----\n\nText.\n\n---\n\nMore.\n";
+    assert.equal(markdownStructure(body).headings, 2);
+  });
+
+  test("a fence closes only on the same character, at least as long", () => {
+    // Inside a ``` block, ~~~ and a shorter `` are code lines, not closers.
+    const body = "```\ncode\n~~~\n``\n````\n\n# After\n";
+    assert.deepEqual(markdownStructure(body), { headings: 1, tableRows: 0, listItems: 0, codeFences: 2, images: 0, blockquoteLines: 0 });
+  });
+
+  test("counts images and blockquote lines", () => {
+    const body = "![A diagram](/images/a.png) and ![B](/b.png)\n\n> Quoted.\n> Still quoted.\n\n| Icon | Name |\n|---|---|\n| ![i](/i.png) | x |\n";
+    const got = markdownStructure(body);
+    assert.equal(got.images, 3);
+    assert.equal(got.blockquoteLines, 2);
+  });
+
+  test("ignores lines inside a fenced code block", () => {
+    const body = "```bash\n# a comment, not a heading\n- not a list item\n| not | a row |\n> not a quote ![x](y)\n```\n";
+    assert.deepEqual(markdownStructure(body), { headings: 0, tableRows: 0, listItems: 0, codeFences: 2, images: 0, blockquoteLines: 0 });
   });
 });
 

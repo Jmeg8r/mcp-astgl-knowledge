@@ -6,6 +6,9 @@
  *
  * Pass 2 — a local voice model rewrites the draft against the ASTGL voice profile.
  *
+ * After each pass the output must keep the original's markdown structure: the same
+ * count of headings, table rows, list items, code fences, images and blockquote lines.
+ *
  * Both passes run on the local Ollama host only (2026-09-24 decision; spec R4). Only
  * the markdown body reaches a model: the frontmatter is copied byte-for-byte except
  * `date` (spec F4). Facts are not updated from model memory; the caller runs the
@@ -122,6 +125,106 @@ function cleanModelOutput(text: string, pass: string): string {
   return out;
 }
 
+export interface MarkdownStructure {
+  headings: number;
+  tableRows: number;
+  listItems: number;
+  codeFences: number;
+  images: number;
+  blockquoteLines: number;
+}
+
+const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
+  headings: "headings",
+  tableRows: "table rows",
+  listItems: "list items",
+  codeFences: "code fences",
+  images: "images",
+  blockquoteLines: "blockquote lines",
+};
+
+// A table's delimiter row, with or without outer pipes: `|---|:---:|` or `--- | ---`.
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
+
+// WHAT: Count the body's headings, table rows, list items, code fences, images and
+//       blockquote lines. Lines
+//       inside a fenced code block count only as part of the block, which closes only
+//       on a bare fence of the same character, at least as long. A table starts at
+//       a line with a pipe followed by a delimiter row, and runs while lines hold a pipe.
+//       A `===` or `---` line straight after a paragraph line is a setext heading.
+// WHY:  The claim check catches added tokens, not lost structure. In the 2026-11-06
+//       evaluation the voice pass turned the tables on 15 of 20 pages into prose and
+//       collapsed lists (55 items to 8 on one page); every fact survived, so nothing
+//       else noticed. Every markdown form counts (pipeless tables, `1)` lists, setext
+//       headings): a form the guard misses can be lost without tripping it.
+export function markdownStructure(body: string): MarkdownStructure {
+  const counts: MarkdownStructure = {
+    headings: 0,
+    tableRows: 0,
+    listItems: 0,
+    codeFences: 0,
+    images: 0,
+    blockquoteLines: 0,
+  };
+  const lines = body.split("\n");
+  let fence: string | null = null; // the opening fence while inside a code block
+  let inTable = false;
+  let afterParagraphLine = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const paragraphLine = afterParagraphLine;
+    afterParagraphLine = false;
+    if (fence !== null) {
+      const closer = line.trim();
+      if (/^(`+|~+)$/.test(closer) && closer[0] === fence[0] && closer.length >= fence.length) {
+        counts.codeFences += 1;
+        fence = null;
+      }
+      continue;
+    }
+    const opener = line.match(FENCE_OPEN);
+    if (opener) {
+      counts.codeFences += 1;
+      fence = opener[1];
+      inTable = false;
+      continue;
+    }
+    // Ten answer pages carry diagrams; a dropped one loses no claim token.
+    counts.images += (line.match(/!\[[^\]]*\]\(/g) ?? []).length;
+    if (/^\s*>/.test(line)) counts.blockquoteLines += 1;
+    if (inTable && line.includes("|")) {
+      counts.tableRows += 1;
+      continue;
+    }
+    inTable = false;
+    const next = lines[i + 1] ?? "";
+    if (line.includes("|") && next.includes("|") && TABLE_DELIMITER.test(next)) {
+      counts.tableRows += 1;
+      inTable = true;
+    } else if (/^#{1,6}\s/.test(line) || (paragraphLine && SETEXT_UNDERLINE.test(line))) {
+      counts.headings += 1;
+    } else if (/^\s*([-*+]|\d+[.)])\s/.test(line)) {
+      counts.listItems += 1;
+    } else {
+      afterParagraphLine = line.trim() !== "";
+    }
+  }
+  return counts;
+}
+
+// WHAT: Refuse a pass whose output changed any structure count, naming each change.
+function requireSameStructure(original: MarkdownStructure, output: string, pass: string): void {
+  const got = markdownStructure(output);
+  const changed = (Object.keys(STRUCTURE_LABELS) as (keyof MarkdownStructure)[])
+    .filter((k) => got[k] !== original[k])
+    .map((k) => `${STRUCTURE_LABELS[k]} ${original[k]} -> ${got[k]}`);
+  if (changed.length > 0) {
+    throw new Error(`${pass} pass changed the page structure (${changed.join(", ")})`);
+  }
+}
+
 // WHAT: One generation via /api/generate, retried on connection-level failures.
 // WHY:  Per project memory, /api/chat returns 503 / empty content for some models
 //       on Ollama 0.20+; /api/generate is the reliable surface. The Mac Studio host
@@ -195,6 +298,8 @@ function draftPrompt(body: string): string {
     "",
     "Rewrite it for clarity and flow: tighten wordy sentences, fix awkward structure, and keep the heading structure and section order.",
     "",
+    "Keep every table, list and code block as it is: the same rows, items and lines.",
+    "",
     "Keep every fact exactly as written. Do NOT change, add or remove any version number, statistic, date, URL, product name or quotation, even if you believe it is out of date. Do NOT add examples, benchmarks or claims that are not in the original.",
     "",
     "The original body is between the <body> tags below. Return only the rewritten markdown body: no tags, no preamble, no commentary, no frontmatter, no code-fence wrapping.",
@@ -215,6 +320,7 @@ function voicePrompt(voiceProfile: string, draft: string): string {
     "  - Apply the voice rules: remove AI markers, vary sentence length, keep the senior-engineer tone.",
     "  - Keep every fact, number, version, date, URL and quotation exactly as written. Add nothing new.",
     "  - Keep the markdown heading structure and roughly the same length.",
+    "  - Keep every table, list and code block as it is. This page is published on the website, where tables render correctly, so the voice profile's rule against markdown tables does not apply here.",
     "  - The body is between the <body> tags below. Return ONLY the markdown body: no tags, no preamble, no frontmatter, no code fences.",
     "",
     "<body>",
@@ -231,12 +337,15 @@ export async function rewritePage(
   const baseUrl = localOllamaBaseUrl();
   const { frontmatter, body } = splitFrontmatter(page);
   const newFrontmatter = setFrontmatterDate(frontmatter, opts.date);
+  const structure = markdownStructure(body);
 
   const draft = await ollamaGenerate(baseUrl, opts.draftModel, draftPrompt(body), "draft");
   const draftText = cleanModelOutput(draft.text, "draft");
+  requireSameStructure(structure, draftText, "draft");
   const voiceProfile = await deps.loadVoiceProfile();
   const voiced = await ollamaGenerate(baseUrl, opts.voiceModel, voicePrompt(voiceProfile, draftText), "voice");
   const voicedText = cleanModelOutput(voiced.text, "voice");
+  requireSameStructure(structure, voicedText, "voice");
 
   return {
     page: `${newFrontmatter}\n${voicedText}\n`,
