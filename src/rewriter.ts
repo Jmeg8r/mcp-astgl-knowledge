@@ -141,22 +141,27 @@ const STRUCTURE_LABELS: Record<keyof MarkdownStructure, string> = {
 
 // A table's delimiter row, with or without outer pipes: `|---|:---:|` or `--- | ---`.
 const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)\s*$/;
 
 // WHAT: Count the body's headings, table rows, list items and code fences. Lines
 //       inside a fenced code block count only as part of the block. A table starts at
 //       a line with a pipe followed by a delimiter row, and runs while lines hold a pipe.
+//       A `===` or `---` line straight after a paragraph line is a setext heading.
 // WHY:  The claim check catches added tokens, not lost structure. In the 2026-11-06
 //       evaluation the voice pass turned the tables on 15 of 20 pages into prose and
 //       collapsed lists (55 items to 8 on one page); every fact survived, so nothing
-//       else noticed. Tables are found by the delimiter row because outer pipes are
-//       optional in markdown, and a table without them would otherwise count as zero.
+//       else noticed. Every markdown form counts (pipeless tables, `1)` lists, setext
+//       headings): a form the guard misses can be lost without tripping it.
 export function markdownStructure(body: string): MarkdownStructure {
   const counts: MarkdownStructure = { headings: 0, tableRows: 0, listItems: 0, codeFences: 0 };
   const lines = body.split("\n");
   let inFence = false;
   let inTable = false;
+  let afterParagraphLine = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const paragraphLine = afterParagraphLine;
+    afterParagraphLine = false;
     if (/^\s*(```|~~~)/.test(line)) {
       counts.codeFences += 1;
       inFence = !inFence;
@@ -173,10 +178,12 @@ export function markdownStructure(body: string): MarkdownStructure {
     if (line.includes("|") && next.includes("|") && TABLE_DELIMITER.test(next)) {
       counts.tableRows += 1;
       inTable = true;
-    } else if (/^#{1,6}\s/.test(line)) {
+    } else if (/^#{1,6}\s/.test(line) || (paragraphLine && SETEXT_UNDERLINE.test(line))) {
       counts.headings += 1;
-    } else if (/^\s*([-*+]|\d+\.)\s/.test(line)) {
+    } else if (/^\s*([-*+]|\d+[.)])\s/.test(line)) {
       counts.listItems += 1;
+    } else {
+      afterParagraphLine = line.trim() !== "";
     }
   }
   return counts;
