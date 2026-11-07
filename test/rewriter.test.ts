@@ -14,7 +14,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { markdownStructure, rewritePage, setFrontmatterDate, splitFrontmatter } from "../src/rewriter.js";
+import { markdownStructure, matchQuoteStyle, rewritePage, setFrontmatterDate, splitFrontmatter } from "../src/rewriter.js";
 
 const FRONTMATTER = [
   "---",
@@ -205,6 +205,31 @@ describe("rewritePage", () => {
     responses = [DRAFT, "```markdown\n# Title\n\nBody.\n```"];
     const out = await rewritePage(PAGE, opts, deps);
     assert.ok(out.page.endsWith("\n# Title\n\nBody.\n"));
+  });
+
+  // The 2026-11-06c eval put curly quotes on 5 of 20 pages whose originals have none.
+  test("straightens curly quotes a pass added to a page that has none", async () => {
+    responses = [
+      "# What is an MCP server?\n\nLet\u2019s draft.",
+      "# What is an MCP server?\n\nIt\u2019s \u201cvoiced\u201d.",
+    ];
+    const out = await rewritePage(PAGE, opts, deps);
+    assert.ok(calls[1].prompt.includes("Let's draft."), "the voice pass gets a straightened draft");
+    assert.ok(out.page.endsWith("\n# What is an MCP server?\n\nIt's \"voiced\".\n"));
+  });
+});
+
+describe("matchQuoteStyle", () => {
+  test("straightens all four curly quotes when the original has none", () => {
+    assert.equal(
+      matchQuoteStyle("It's \"plain\".", "\u2018a\u2019 \u201cb\u201d"),
+      "'a' \"b\""
+    );
+  });
+
+  test("leaves the output alone when the original has a curly quote", () => {
+    const output = "It\u2019s \u201ccurly\u201d.";
+    assert.equal(matchQuoteStyle("It\u2019s mixed, it's here.", output), output);
   });
 });
 

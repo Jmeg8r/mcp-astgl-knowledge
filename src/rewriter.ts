@@ -125,6 +125,18 @@ function cleanModelOutput(text: string, pass: string): string {
   return out;
 }
 
+// WHAT: When the original body has no curly quotes, replace any in a pass's output
+//       with straight ones; otherwise return the output unchanged.
+// WHY:  The 2026-11-06c eval put curly quotes on 5 of 20 pages, so edited lines read
+//       `Let’s` beside untouched `Let's`. No answer page uses curly quotes, and no
+//       check catches the mix. A page that already has one keeps whatever the model
+//       returned: its intended style is unknown.
+const CURLY_QUOTE = /[\u2018\u2019\u201C\u201D]/;
+export function matchQuoteStyle(original: string, output: string): string {
+  if (CURLY_QUOTE.test(original)) return output;
+  return output.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+}
+
 export interface MarkdownStructure {
   headings: number;
   tableRows: number;
@@ -340,11 +352,11 @@ export async function rewritePage(
   const structure = markdownStructure(body);
 
   const draft = await ollamaGenerate(baseUrl, opts.draftModel, draftPrompt(body), "draft");
-  const draftText = cleanModelOutput(draft.text, "draft");
+  const draftText = matchQuoteStyle(body, cleanModelOutput(draft.text, "draft"));
   requireSameStructure(structure, draftText, "draft");
   const voiceProfile = await deps.loadVoiceProfile();
   const voiced = await ollamaGenerate(baseUrl, opts.voiceModel, voicePrompt(voiceProfile, draftText), "voice");
-  const voicedText = cleanModelOutput(voiced.text, "voice");
+  const voicedText = matchQuoteStyle(body, cleanModelOutput(voiced.text, "voice"));
   requireSameStructure(structure, voicedText, "voice");
 
   return {
