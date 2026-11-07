@@ -149,6 +149,12 @@ describe("rewritePage", () => {
     await assert.rejects(rewritePage(listPage, opts, deps), /draft pass changed the page structure.*list items 2 -> 0/);
   });
 
+  test("fails when a pass swaps a closing fence for one that does not close", async () => {
+    const codePage = `${FRONTMATTER}\n# Run\n\n\`\`\`bash\necho hi\n\`\`\`\n\nDone.\n`;
+    responses = ["# Run\n\n```bash\necho hi\n~~~\n\nDone.", "# Run\n\nVoiced."];
+    await assert.rejects(rewritePage(codePage, opts, deps), /draft pass changed the page structure.*code fences 2 -> 1/);
+  });
+
   test("fails when the voice pass collapses a list", async () => {
     const listPage = `${FRONTMATTER}\n# Steps\n\n- one\n- two\n- three\n`;
     responses = ["# Steps\n\n- one\n- two\n- three", "# Steps\n\nOne, two and three."];
@@ -218,6 +224,12 @@ describe("markdownStructure", () => {
   test("counts a setext heading, and a rule after a blank line is not one", () => {
     const body = "Title\n=====\n\nPart\n----\n\nText.\n\n---\n\nMore.\n";
     assert.equal(markdownStructure(body).headings, 2);
+  });
+
+  test("a fence closes only on the same character, at least as long", () => {
+    // Inside a ``` block, ~~~ and a shorter `` are code lines, not closers.
+    const body = "```\ncode\n~~~\n``\n````\n\n# After\n";
+    assert.deepEqual(markdownStructure(body), { headings: 1, tableRows: 0, listItems: 0, codeFences: 2 });
   });
 
   test("ignores lines inside a fenced code block", () => {
